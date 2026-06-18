@@ -1,0 +1,456 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --blue:#58a6ff;
+    --neutral:#c9d1d9; --tile:#161b22;
+  }
+  html,body{margin:0;background:transparent;height:100%;overflow:hidden;
+    font-family:-apple-system,"PingFang SC",sans-serif;-webkit-user-select:none;
+    cursor:default;}
+  .bar{position:absolute;inset:6px;display:flex;
+    background:rgba(13,17,23,.94);border:1px solid rgba(255,255,255,.07);
+    border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);overflow:hidden;}
+
+  /* left: captions */
+  .captions{flex:1;min-width:0;display:flex;flex-direction:column;
+    padding:10px 18px 8px;gap:2px;}
+  .peer-wrap{flex:1;min-height:0;display:flex;flex-direction:column;
+    justify-content:flex-end;overflow:hidden;}
+  .peer{font-size:22px;font-weight:700;line-height:28px;color:#7ee787;
+    white-space:pre;}
+  .mine{font-size:13px;line-height:1.25;color:#6e7681;
+    white-space:pre-wrap;word-break:break-word;max-height:2.6em;overflow:hidden;
+    margin-top:4px;}
+
+  /* right: control panel */
+  .panel{display:flex;flex-direction:column;align-items:center;gap:7px;
+    padding:8px 8px 7px;border-left:1px solid rgba(255,255,255,.06);}
+  .status{font-size:12px;font-weight:600;letter-spacing:.2px;color:#6e7681;
+    white-space:nowrap;}
+  .grid{display:grid;grid-template-columns:repeat(2,72px);
+    grid-template-rows:repeat(2,72px);gap:3px;}
+  .tile{position:relative;border-radius:0;background:var(--tile);
+    border:1px solid rgba(255,255,255,.06);display:grid;place-items:center;
+    overflow:visible;cursor:pointer;transition:background .15s;}
+  .tile.indicator{cursor:default;}
+  .tile::before{content:"";position:absolute;inset:-4px;border-radius:2px;
+    background:radial-gradient(closest-side,var(--c,transparent),transparent 70%);
+    filter:blur(7px);opacity:0;transition:opacity .25s;pointer-events:none;}
+  .tile.on::before{opacity:.55;}
+  .tile.on{background:#1b222c;}
+  .tile:not(.indicator):hover::before{opacity:.24;}
+  .tile svg{width:24px;height:24px;stroke:#c9d1d9;stroke-width:2;fill:none;
+    stroke-linecap:round;stroke-linejoin:round;z-index:1;}
+  .tile.on svg{stroke:#e6edf3;}
+  .green{--c:var(--green);} .amber{--c:var(--amber);}
+  .red{--c:var(--red);} .blue{--c:var(--blue);}
+  .link.searching::before{--c:var(--neutral);animation:pulse 0.9s ease-in-out infinite;}
+  .link.connected::before{--c:var(--green);opacity:.55;animation:none;}
+  @keyframes pulse{0%,100%{opacity:.15}50%{opacity:.62}}
+
+  /* settings panel — fills the window once it grows to card size */
+  .settings{position:fixed;inset:0;background:rgba(13,17,23,.985);z-index:20;
+    display:none;flex-direction:column;padding:15px 18px 13px;border-radius:10px;}
+  .settings.show{display:flex;}
+  .s-head{display:flex;justify-content:space-between;align-items:center;
+    font-size:15px;font-weight:700;color:#e6edf3;margin-bottom:4px;}
+  .s-close{cursor:pointer;color:#8b949e;font-size:15px;padding:2px 6px;}
+  .s-close:hover{color:#e6edf3;}
+  .s-hint{font-size:12px;color:var(--amber);margin-bottom:6px;display:none;}
+  .s-body{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding-right:2px;}
+  .s-row{display:flex;flex-direction:column;gap:3px;}
+  .s-row label{font-size:11px;color:#8b949e;font-weight:600;letter-spacing:.2px;}
+  .s-row input,.s-row select{background:#0d1117;border:1px solid rgba(255,255,255,.12);
+    border-radius:6px;color:#e6edf3;font-size:13px;padding:7px 9px;outline:none;font-family:inherit;}
+  .s-row input:focus,.s-row select:focus{border-color:var(--blue);}
+  .s-link{font-size:11px;color:var(--blue);cursor:pointer;margin-top:-3px;align-self:flex-start;}
+  .s-link:hover{text-decoration:underline;}
+  .s-err{font-size:12px;color:var(--red);min-height:15px;padding-top:4px;}
+  .s-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:6px;}
+  .s-btn{font-family:inherit;font-size:13px;font-weight:600;border-radius:6px;padding:7px 16px;
+    cursor:pointer;border:1px solid rgba(255,255,255,.14);background:#161b22;color:#c9d1d9;}
+  .s-btn:hover{background:#1b222c;}
+  .s-save{background:var(--green);border-color:var(--green);color:#06210d;}
+  .s-save:hover{background:#46c95a;}
+
+  /* wizard (reuses .settings overlay) */
+  .wz-step{display:none;}
+  .wz-intro{font-size:12.5px;color:#8b949e;line-height:1.5;margin-bottom:11px;}
+  .wz-roles{display:flex;flex-direction:column;gap:9px;margin-bottom:11px;}
+  .wz-role{display:flex;align-items:center;gap:9px;font-size:13px;color:#e6edf3;cursor:pointer;}
+  .wz-share{font-size:12px;color:#8b949e;margin:10px 0 6px;}
+  .wz-copyrow{display:flex;gap:6px;align-items:stretch;}
+  .wz-copyrow input{flex:1;min-width:0;background:#0d1117;border:1px solid rgba(255,255,255,.12);
+    border-radius:6px;color:#7ee787;font-size:12px;padding:7px 9px;outline:none;font-family:inherit;
+    text-overflow:ellipsis;}
+  .wz-copyrow .s-btn{white-space:nowrap;}
+  .s-row textarea{background:#0d1117;border:1px solid rgba(255,255,255,.12);border-radius:6px;
+    color:#7ee787;font-size:12px;padding:7px 9px;outline:none;font-family:inherit;resize:none;}
+  .s-row textarea:focus{border-color:var(--blue);}
+  .wz-note{font-size:11px;color:#6e7681;margin:6px 0 11px;line-height:1.5;}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="captions">
+      <div class="peer-wrap"><div class="peer" id="peer"></div></div>
+      <div class="mine" id="mine"></div>
+    </div>
+    <div class="panel">
+      <span class="status" id="status"></span>
+      <div class="grid">
+        <div class="tile on green" id="pp" onclick="togglePause()">
+          <svg id="ppicon" viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20" fill="#e6edf3" stroke="none"/></svg>
+        </div>
+        <div class="tile indicator link searching" id="link">
+          <svg viewBox="0 0 24 24"><path d="M9 15l6-6"/><path d="M11 7l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M13 17l-1 1a4 4 0 0 1-6-6l1-1"/></svg>
+        </div>
+        <div class="tile blue" id="settings" title="settings" onclick="toggleSettings()">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L14.5 3h-5l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h5l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5a7 7 0 0 0 .1-1z"/></svg>
+        </div>
+        <div class="tile red" id="power" onclick="requestClose()">
+          <svg viewBox="0 0 24 24"><path d="M12 4v8"/><path d="M7 7a8 8 0 1 0 10 0"/></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings" id="settingsPanel">
+    <div class="s-head"><span>Settings</span><span class="s-close" onclick="closeSettings()">✕</span></div>
+    <div class="s-hint" id="sHint">Welcome — fill these in to start translating.</div>
+    <div class="s-body">
+      <div class="s-row"><label>Your name</label><input id="fName" type="text"></div>
+      <div class="s-row"><label>Talking to</label><input id="fPeer" type="text"></div>
+      <div class="s-row"><label>Translate to</label><select id="fTarget"></select></div>
+      <div class="s-row"><label>Microphone</label><select id="fMic"></select></div>
+      <div class="s-row"><label>Gemini API key</label><input id="fKey" type="password" autocomplete="off"></div>
+      <span class="s-link" onclick="keyHelp()">How do I get a key? ↗</span>
+      <div class="s-row"><label>Relay URL</label><input id="fRelay" type="text" placeholder="wss://…"></div>
+      <div class="s-row"><label>Meeting / room</label><input id="fRoom" type="text" placeholder="abc-defg-hij"></div>
+    </div>
+    <div class="s-err" id="sErr"></div>
+    <div class="s-actions">
+      <span class="s-btn" onclick="closeSettings()">Cancel</span>
+      <span class="s-btn s-save" onclick="saveSettings()">Save</span>
+    </div>
+  </div>
+
+  <div class="settings" id="wizard">
+    <div class="s-head"><span id="wzTitle">Welcome</span><span class="s-close" onclick="closeWizard()">✕</span></div>
+    <div class="s-body">
+      <div class="wz-step" id="wzKey">
+        <div class="wz-intro">TranslateBar shows live translated subtitles next to your video call. Each side translates its own microphone with Google Gemini — paste your key once.</div>
+        <div class="s-row"><label>Gemini API key</label><input id="wzKeyInput" type="password" autocomplete="off" placeholder="paste your key"></div>
+        <span class="s-link" onclick="keyHelp()">How do I get a key? ↗</span>
+      </div>
+      <div class="wz-step" id="wzConnect">
+        <div class="wz-intro">Are you starting this meeting, or joining one the other side started?</div>
+        <div class="wz-roles">
+          <label class="wz-role"><input type="radio" name="wzrole" value="host" onchange="onRole()"> I'm starting it</label>
+          <label class="wz-role"><input type="radio" name="wzrole" value="join" onchange="onRole()"> I'm joining</label>
+        </div>
+        <div id="wzJoin" style="display:none">
+          <div class="s-row"><label>Paste the invitation your host sent you</label>
+            <textarea id="wzJoinLink" rows="3" placeholder="paste the whole message — we'll find the link"></textarea></div>
+        </div>
+      </div>
+      <div class="wz-step" id="wzReady">
+        <div id="wzShare" style="display:none">
+          <div class="wz-share" id="wzShareMsg">Creating your link…</div>
+          <div class="wz-copyrow"><input id="wzLink" readonly placeholder="…">
+            <span class="s-btn s-save" id="wzCopyBtn" onclick="copyInvite()" style="display:none">Copy invitation</span></div>
+          <div class="wz-note">Send it via Slack / email / WeChat. They paste it into TranslateBar → you're connected.</div>
+        </div>
+        <div class="wz-intro">These are remembered for next time — change them anytime with ⚙.</div>
+        <div class="s-row"><label>Your name</label><input id="wzName" type="text"></div>
+        <div class="s-row"><label>Translate my speech into</label><select id="wzTarget"></select></div>
+        <div class="s-row"><label>Microphone</label><select id="wzMic"></select></div>
+      </div>
+    </div>
+    <div class="s-err" id="wzErr"></div>
+    <div class="s-actions">
+      <span class="s-btn" id="wzBack" onclick="wizBack()" style="display:none">← Back</span>
+      <span class="s-btn s-save" id="wzNext" onclick="wizNext()">Next →</span>
+    </div>
+  </div>
+  <script>
+    const PLAY = '<polygon points="6,4 20,12 6,20" fill="#e6edf3" stroke="none"/>';
+    const PAUSE = '<rect x="6" y="5" width="4" height="14" fill="#e6edf3" stroke="none"/><rect x="14" y="5" width="4" height="14" fill="#e6edf3" stroke="none"/>';
+    let live = true, linked = false, closeArmed = false, closeTimer = null;
+
+    function renderStatus(){
+      if (closeArmed) return;
+      const pC = live ? 'var(--green)' : 'var(--amber)';
+      const lC = linked ? 'var(--green)' : 'var(--neutral)';
+      document.getElementById('status').innerHTML =
+        `<span style="color:${pC}">${live ? 'live' : 'paused'}</span> · ` +
+        `<span style="color:${lC}">${linked ? 'linked' : 'pairing…'}</span>`;
+    }
+    // --- pushed from Python ---
+    let curRouting = {name:"You", peer:"Team", targetLabel:"", room:""};
+    function setLabels(myName, peerName, targetLabel, room){
+      curRouting = {name:myName, peer:peerName, targetLabel:targetLabel, room:room};
+    }
+    // peer captions: typewriter line scroll (fill a line L->R; full -> new line
+    // at the bottom; older lines move up; the top line scrolls off).
+    const peerEl = document.getElementById('peer');
+    const peerWrap = peerEl.parentElement;
+    const LH = 28;                                   // px, matches .peer line-height
+    const meas = document.createElement('canvas').getContext('2d');
+    let pFinal = "", pLive = "";
+
+    function peerFont(){
+      const s = getComputedStyle(peerEl);
+      return `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+    }
+    function wrapLines(text, maxW){
+      meas.font = peerFont();
+      const lines = []; let cur = "";
+      for (const tok of (text.match(/\s+|\S+/g) || [])){
+        if (/^\s+$/.test(tok)){                       // whitespace -> collapse to one space
+          if (cur === "") continue;
+          if (meas.measureText(cur + " ").width <= maxW) cur += " ";
+          else { lines.push(cur.trimEnd()); cur = ""; }
+          continue;
+        }
+        if (meas.measureText(cur + tok).width <= maxW){ cur += tok; continue; }
+        if (cur.trim() !== ""){ lines.push(cur.trimEnd()); cur = ""; }
+        for (const ch of [...tok]){                   // char-break long words / CJK
+          if (cur !== "" && meas.measureText(cur + ch).width > maxW){ lines.push(cur); cur = ""; }
+          cur += ch;
+        }
+      }
+      if (cur.trim() !== "" || lines.length === 0) lines.push(cur.trimEnd());
+      return lines;
+    }
+    function renderPeer(){
+      const maxW = peerWrap.clientWidth;
+      if (maxW <= 0) return;
+      const lines = wrapLines((pFinal + " " + pLive).trim(), maxW);
+      const cap = Math.max(1, Math.floor(peerWrap.clientHeight / LH));
+      peerEl.textContent = lines.slice(-cap).join("\n");
+    }
+    function pushPeer(text, final){
+      if (final){
+        pFinal = (pFinal + " " + text).trim();
+        if (pFinal.length > 2000) pFinal = pFinal.slice(-2000);
+        pLive = "";
+      } else { pLive = text; }
+      renderPeer();
+    }
+    function pushMine(text){ document.getElementById('mine').textContent = text; }
+    window.addEventListener('resize', renderPeer);
+    function setLink(connected){
+      linked = connected;
+      document.getElementById('link').className =
+        'tile indicator link ' + (connected ? 'connected' : 'searching');
+      renderStatus();
+    }
+    // --- settings panel ---
+    function val(id){ return document.getElementById(id).value; }
+    function panelOpen(){ return document.getElementById('settingsPanel').classList.contains('show'); }
+
+    async function openSettings(firstRun){
+      if (window.pywebview){
+        await window.pywebview.api.enter_settings();      // grow the window to a card
+        populateSettings(await window.pywebview.api.get_settings());
+      }
+      document.getElementById('sHint').style.display = firstRun ? 'block' : 'none';
+      document.getElementById('sErr').textContent = '';
+      document.getElementById('settingsPanel').classList.add('show');
+      document.getElementById('settings').classList.add('on');
+    }
+    function closeSettings(){
+      document.getElementById('settingsPanel').classList.remove('show');
+      document.getElementById('settings').classList.remove('on');
+      if (window.pywebview) window.pywebview.api.exit_settings();   // shrink back to bar
+    }
+    function toggleSettings(){ panelOpen() ? closeSettings() : openSettings(false); }
+
+    // --- setup wizard (2 steps + a one-time key step) ---
+    let wizSteps=[], wizIdx=0, wizData={}, wizRole=null, wizRelay=null, wizRoom="", wizKey="", hostStarted=false;
+    function wizOpen(){ return document.getElementById('wizard').classList.contains('show'); }
+    const WZ_TITLES = {wzKey:'Get started', wzConnect:'Connect', wzReady:'Almost there'};
+
+    async function startWizard(){                                   // called from Python at launch
+      if (window.pywebview){
+        await window.pywebview.api.enter_settings();                // grow the window first
+        wizData = await window.pywebview.api.get_settings();
+      } else { wizData = {langs:[], mics:[]}; }
+      document.getElementById('wzName').value = wizData.name || '';
+      fillLangs('wzTarget', wizData.langs, wizData.target);
+      fillMics('wzMic', wizData.mics, wizData.mic_index);
+      document.getElementById('wzJoinLink').value = '';
+      document.getElementById('wzKeyInput').value = '';
+      document.getElementById('wzLink').value = '';
+      document.querySelectorAll('input[name=wzrole]').forEach(r => r.checked=false);
+      document.getElementById('wzJoin').style.display='none';
+      document.getElementById('wzShare').style.display='none';
+      wizRole=null; wizRelay=null; wizRoom=''; wizKey=''; hostStarted=false;
+      wizSteps = [];
+      if (!wizData.has_key) wizSteps.push('wzKey');
+      wizSteps.push('wzConnect','wzReady');
+      wizIdx = 0;
+      document.getElementById('wzErr').textContent='';
+      document.getElementById('wizard').classList.add('show');
+      document.getElementById('settings').classList.add('on');
+      showStep();
+    }
+    function closeWizard(){
+      document.getElementById('wizard').classList.remove('show');
+      document.getElementById('settings').classList.remove('on');
+      if (window.pywebview) window.pywebview.api.exit_settings();
+    }
+    function showStep(){
+      const step = wizSteps[wizIdx];
+      wizSteps.forEach((id,i)=>{ document.getElementById(id).style.display=(i===wizIdx)?'block':'none'; });
+      document.getElementById('wzBack').style.display = wizIdx>0 ? 'inline-block':'none';
+      document.getElementById('wzNext').textContent = (wizIdx===wizSteps.length-1) ? 'Start' : 'Next →';
+      document.getElementById('wzTitle').textContent = WZ_TITLES[step] || 'Setup';
+      document.getElementById('wzErr').textContent='';
+      if (step==='wzReady'){                                   // host: create the link to share now
+        const isHost = wizRole==='host';
+        document.getElementById('wzShare').style.display = isHost ? 'block' : 'none';
+        if (isHost && !hostStarted) doHost();
+      }
+    }
+    function wizBack(){ if (wizIdx>0){ wizIdx--; showStep(); } }
+    function onRole(){
+      const r = document.querySelector('input[name=wzrole]:checked');
+      wizRole = r ? r.value : null;
+      document.getElementById('wzJoin').style.display = wizRole==='join'?'block':'none';
+    }
+    function parseInvite(text){                                  // foolproof: find the link in any pasted text
+      const u = (text||'').match(/wss?:\/\/[^\s#"'<>]+/i);
+      if (!u) return null;
+      const f = (text||'').match(/#([A-Za-z0-9_.-]+)/);
+      return { relay: u[0], room: f ? f[1] : '' };
+    }
+    async function doHost(){
+      const msg=document.getElementById('wzShareMsg'), btn=document.getElementById('wzCopyBtn');
+      msg.textContent='Creating your link…'; btn.style.display='none';
+      const res = window.pywebview ? await window.pywebview.api.start_hosting() : null;
+      if (res && res.ok){
+        hostStarted=true; wizRelay='ws://localhost:8765'; wizRoom=res.room;
+        document.getElementById('wzLink').value = res.link;
+        msg.textContent='Your invitation link — send it to the other side:';
+        btn.style.display='inline-block';
+      } else { msg.textContent=(res&&res.error)||'Could not start hosting.'; }
+    }
+    function inviteText(){
+      return 'Join my live-translated meeting in TranslateBar:\n' +
+             '1. Get the app (one-time setup): https://github.com/rheijmen/translatebar\n' +
+             '2. Open it, click "I\'m joining", and paste this:\n' +
+             document.getElementById('wzLink').value;
+    }
+    function copyInvite(){
+      if (window.pywebview) window.pywebview.api.copy(inviteText());
+      const b=document.getElementById('wzCopyBtn'), t=b.textContent;
+      b.textContent='Copied ✓'; setTimeout(()=>{ b.textContent=t; }, 1500);
+    }
+    async function wizNext(){
+      const step = wizSteps[wizIdx], err=document.getElementById('wzErr');
+      if (step==='wzKey'){
+        const k = document.getElementById('wzKeyInput').value.trim();
+        if (!k){ err.textContent='Please paste your Gemini key.'; return; }
+        wizKey = k;
+      }
+      if (step==='wzConnect'){
+        if (!wizRole){ err.textContent='Choose “starting” or “joining”.'; return; }
+        if (wizRole==='join'){
+          const p = parseInvite(document.getElementById('wzJoinLink').value);
+          if (!p){ err.textContent='Couldn’t find a link in that — paste the invitation your host sent.'; return; }
+          if (!p.room){ err.textContent='That link is missing its room — ask your host for a fresh invitation.'; return; }
+          wizRelay = p.relay; wizRoom = p.room;
+        }
+      }
+      if (wizIdx < wizSteps.length-1){ wizIdx++; showStep(); return; }
+      if (wizRole==='host' && !hostStarted){ err.textContent='Still creating your link — one moment…'; return; }
+      const payload = {
+        name: document.getElementById('wzName').value,
+        peer_name: wizData.peer_name || 'Team',
+        target: document.getElementById('wzTarget').value,
+        mic_index: document.getElementById('wzMic').value,
+        relay: wizRelay, room: wizRoom, key: wizKey,
+      };
+      err.textContent='Starting…';
+      if (!window.pywebview){ closeWizard(); return; }
+      const res = await window.pywebview.api.save_settings(payload);
+      if (res && res.ok){ err.textContent=''; closeWizard(); }
+      else { err.textContent=(res&&res.error)||'Something went wrong.'; }
+    }
+
+    function fillLangs(id, langs, cur){
+      document.getElementById(id).innerHTML = (langs||[]).map(l =>
+        `<option value="${l.code}"${l.code===cur?' selected':''}>${l.label}</option>`).join('');
+    }
+    function fillMics(id, mics, micIndex){
+      const sel = (micIndex===null||micIndex===undefined) ? '' : String(micIndex);
+      document.getElementById(id).innerHTML =
+        `<option value=""${sel===''?' selected':''}>System default</option>` +
+        (mics||[]).map(m =>
+          `<option value="${m.index}"${String(m.index)===sel?' selected':''}>${m.name}</option>`).join('');
+    }
+    function populateSettings(s){
+      document.getElementById('fName').value = s.name || '';
+      document.getElementById('fPeer').value = s.peer_name || '';
+      fillLangs('fTarget', s.langs, s.target);
+      fillMics('fMic', s.mics, s.mic_index);
+      document.getElementById('fRelay').value = s.relay || '';
+      document.getElementById('fRoom').value = s.room || '';
+      const key = document.getElementById('fKey');
+      key.value = '';
+      key.placeholder = s.has_key ? 'saved — leave blank to keep' : 'paste your Gemini API key';
+    }
+    async function saveSettings(){
+      const payload = {
+        name: val('fName'), peer_name: val('fPeer'), target: val('fTarget'),
+        mic_index: val('fMic'), relay: val('fRelay'), room: val('fRoom'), key: val('fKey'),
+      };
+      const err = document.getElementById('sErr');
+      err.textContent = 'Saving…';
+      if (!window.pywebview){ err.textContent=''; closeSettings(); return; }
+      const res = await window.pywebview.api.save_settings(payload);
+      if (res && res.ok){ err.textContent=''; closeSettings(); }
+      else { err.textContent = (res && res.error) || 'Something went wrong.'; }
+    }
+    function keyHelp(){ if (window.pywebview) window.pywebview.api.open_key_help(); }
+    // --- user actions ---
+    function renderPause(){
+      document.getElementById('pp').className = 'tile on ' + (live ? 'green' : 'amber');
+      document.getElementById('ppicon').innerHTML = live ? PLAY : PAUSE;
+      renderStatus();
+    }
+    function togglePause(){
+      live = !live;                 // optimistic: flip + render instantly (one click)
+      renderPause();
+      if (window.pywebview)
+        window.pywebview.api.toggle_pause().then(p => { live = !p; renderPause(); });
+    }
+    function requestClose(){
+      if (closeArmed){ if (window.pywebview) window.pywebview.api.quit(); return; }
+      closeArmed = true;
+      document.getElementById('power').classList.add('on');
+      document.getElementById('status').innerHTML =
+        '<span style="color:var(--red)">close? click again</span>';
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(()=>{
+        closeArmed = false;
+        document.getElementById('power').classList.remove('on');
+        renderStatus();
+      }, 3000);
+    }
+    document.addEventListener('keydown', e=>{
+      if (e.key!=='Escape') return;
+      if (wizOpen()){ closeWizard(); return; }
+      if (panelOpen()){ closeSettings(); return; }
+      if (window.pywebview) window.pywebview.api.quit();
+    });
+    window.addEventListener('pywebviewready', ()=>{ window.pywebview.api.ready(); });
+    renderStatus();
+  </script>
+</body>
+</html>

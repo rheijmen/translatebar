@@ -1,0 +1,13 @@
+google-genai>=2.8.0
+pyaudio>=0.2.14
+websockets>=16.0
+pywebview>=6.2
+# stdlib used: asyncio, wave, audioop
+#   - audioop is stdlib through Python 3.12; on Python 3.13+ also run: pip install audioop-lts
+# system dependency for pyaudio:
+#   - macOS:   brew install portaudio   (before `pip install pyaudio`)
+#   - Windows: `pip install pyaudio` ships a wheel with PortAudio bundled (no extra step)
+# pywebview backend installs automatically:
+#   - macOS:   pyobjc (WebKit)
+#   - Windows: needs the Microsoft Edge WebView2 runtime (preinstalled on Win 11;
+#              else: https://developer.microsoft.com/microsoft-edge/webview2/)
