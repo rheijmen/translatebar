@@ -66,4 +66,12 @@ def set_key(key: str) -> None:
         pass
     if not found:
         lines.append(f"{KEY_VAR}={key}")
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # owner-only permissions — this file holds the API key
+    data = "\n".join(lines) + "\n"
+    fd = os.open(ENV_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(data)
+    try:
+        os.chmod(ENV_PATH, 0o600)        # tighten if it pre-existed with broader perms
+    except OSError:
+        pass

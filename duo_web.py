@@ -231,7 +231,7 @@ def run_app(cfg, slot=0):
                         return {"ok": False, "error":
                                 "Couldn't open the public tunnel — check your network."}
                     host_holder["h"] = h
-                room = cfg["room"] or secrets.token_hex(4)   # generate once, reuse
+                room = secrets.token_urlsafe(16)             # fresh ≥128-bit room key
                 cfg["relay"] = "ws://localhost:8765"         # our own bar connects locally
                 cfg["room"] = room
                 link = f"{host_holder['h'].url}#{room}"       # relay + room in one link

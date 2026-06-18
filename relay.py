@@ -31,7 +31,10 @@ async def handler(ws):
                 continue
 
             if msg.get("type") == "join":
-                room = msg.get("room") or "default"
+                r = (msg.get("room") or "").strip()
+                if not r:
+                    continue  # require an explicit room — no shared 'default' lobby
+                room = r
                 ROOMS.setdefault(room, set()).add(ws)
                 count = _broadcast_count(room)
                 # tell everyone in the room how many peers are present now
