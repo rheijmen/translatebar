@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import queue
 import sys
@@ -68,7 +69,10 @@ CHANNELS = 1
 SEND_SAMPLE_RATE = 16000          # Gemini Live expects 16 kHz PCM input
 CHUNK = 1024
 AUDIO_MIME = f"audio/pcm;rate={SEND_SAMPLE_RATE}"
-MODEL = "gemini-3.5-live-translate-preview"
+MODEL = "gemini-3.5-live-translate-preview"   # "live" engine: speech -> speech
+DEFAULT_CHUNK_MODEL = "gemini-3.1-flash-lite"  # "chunked" engine: audio -> text (cheap)
+OPENAI_TRANSLATE_MODEL = "gpt-realtime-translate"  # "openai" engine: streaming translate
+OPENAI_SR = 24000                              # OpenAI realtime wants 24 kHz PCM16
 
 # Chinese codes accepted by the model are zh-Hans / zh-Hant (NOT zh / zh-CN).
 DEFAULT_TARGET_THEM = "zh-Hans"   # OUT: your English -> their Chinese
@@ -76,20 +80,35 @@ DEFAULT_TARGET_YOU = "en"         # IN:  their Chinese -> your English
 
 
 # ---- Config builder (verified against google-genai 2.8.0) --------------------
-def build_config(target_language_code: str):
+def build_config(target_language_code: str, model: str = MODEL):
     from google.genai import types
-    return types.LiveConnectConfig(
+    common = dict(
         response_modalities=["AUDIO"],
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
-        translation_config=types.TranslationConfig(
-            target_language_code=target_language_code,
-            # True = keep captioning even when the speaker is already using the
-            # target language (it parrots the input). False drops those stretches
-            # entirely, so captions vanish whenever the other side switches to
-            # your language — we want continuous text, so echo.
-            echo_target_language=True,
-        ),
+    )
+    if "translate" in model:
+        # Purpose-built translate model. echo_target_language=False: only emit the
+        # TRANSLATION, never parrot the source. (echo=True made it intermittently
+        # repeat the source language -> the English<->Chinese flicker.) Each side
+        # speaks its own (non-target) language, so this translates cleanly; the
+        # only trade-off is no caption when someone speaks the target language.
+        return types.LiveConnectConfig(
+            **common,
+            translation_config=types.TranslationConfig(
+                target_language_code=target_language_code,
+                echo_target_language=False,
+            ),
+        )
+    # General native-audio Live model (cheaper): make it interpret via a system
+    # instruction. It still speaks the translation; we read the transcription.
+    return types.LiveConnectConfig(
+        **common,
+        system_instruction=(
+            f"You are a simultaneous interpreter. Translate everything you hear "
+            f"into {target_language_code} and speak ONLY the translation — no "
+            f"greetings, answers, or commentary. If the speech is already in "
+            f"{target_language_code}, repeat it as-is."),
     )
 
 
@@ -113,6 +132,73 @@ class _StopWorker(Exception):
     never opens a second mic stream over a live one (the old segfault path)."""
 
 
+async def _mic_frames(stop_event, pause_event, device_index, out_rate=SEND_SAMPLE_RATE):
+    """Async generator of mono PCM frames from the mic at `out_rate` Hz (16 kHz
+    for Gemini, 24 kHz for OpenAI). Callback-mode PortAudio (avoids the
+    blocking-read segfault), resampling off the audio thread, stream closed on
+    stop. Skips frames while paused but keeps draining the device so it never
+    overflows. Shared by all engines."""
+    import pyaudio
+    import audioop  # stdlib (py3.12); downmix + resample to 16 kHz mono
+    import queue as _queue
+    pa = pyaudio.PyAudio()
+    idx = device_index
+    if idx is None:
+        idx = pa.get_default_input_device_info()["index"]
+    info = pa.get_device_info_by_index(idx)
+    native_rate = int(info.get("defaultSampleRate", SEND_SAMPLE_RATE))
+    in_ch = min(2, int(info.get("maxInputChannels", 1)) or 1)
+    raw_q: "queue.Queue" = _queue.Queue(maxsize=100)
+
+    def _cb(in_data, frame_count, time_info, status):
+        try:
+            raw_q.put_nowait(in_data)
+        except _queue.Full:
+            pass  # consumer fell behind: drop rather than stall
+        return (None, pyaudio.paComplete if stop_event.is_set() else pyaudio.paContinue)
+
+    stream = await asyncio.to_thread(
+        pa.open, format=pyaudio.paInt16, channels=in_ch, rate=native_rate,
+        input=True, input_device_index=idx, frames_per_buffer=CHUNK, stream_callback=_cb)
+    rs_state = None
+    try:
+        while not stop_event.is_set():
+            if not stream.is_active():
+                raise OSError("input stream stopped (device change?)")
+            try:
+                data = await asyncio.to_thread(raw_q.get, True, 0.2)
+            except _queue.Empty:
+                continue
+            if pause_event is not None and pause_event.is_set():
+                continue  # paused: keep capturing but emit nothing
+            if in_ch == 2:
+                data = audioop.tomono(data, 2, 0.5, 0.5)
+            if native_rate != out_rate:
+                data, rs_state = audioop.ratecv(
+                    data, 2, 1, native_rate, out_rate, rs_state)
+            yield data
+    finally:
+        try:
+            stream.stop_stream()
+            stream.close()
+        except Exception:
+            pass
+        pa.terminate()
+
+
+def _pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
+    """Wrap raw 16-bit mono PCM as an in-memory WAV blob."""
+    import io
+    import wave
+    bio = io.BytesIO()
+    with wave.open(bio, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(pcm)
+    return bio.getvalue()
+
+
 class DirectionWorker:
     """
     Runs one direction end to end: capture audio -> Live API -> emit transcripts.
@@ -123,12 +209,13 @@ class DirectionWorker:
     """
 
     def __init__(self, client, direction: Direction, emit, stop_event: threading.Event,
-                 pause_event: threading.Event | None = None):
+                 pause_event: threading.Event | None = None, live_model: str = MODEL):
         self.client = client
         self.d = direction
         self.emit = emit
         self.stop_event = stop_event
         self.pause_event = pause_event
+        self.live_model = live_model
         self._audio_q: asyncio.Queue | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -139,8 +226,8 @@ class DirectionWorker:
         while not self.stop_event.is_set():
             try:
                 self.emit("status", self.d.key, None, "connecting…", False)
-                cfg = build_config(self.d.target_language_code)
-                async with self.client.aio.live.connect(model=MODEL, config=cfg) as session:
+                cfg = build_config(self.d.target_language_code, self.live_model)
+                async with self.client.aio.live.connect(model=self.live_model, config=cfg) as session:
                     self.emit("status", self.d.key, None, "● live", False)
                     backoff = 1.0
                     async with asyncio.TaskGroup() as tg:
@@ -175,67 +262,8 @@ class DirectionWorker:
             await self._produce_mic()
 
     async def _produce_mic(self):
-        # Callback mode: PortAudio delivers buffers on its own audio thread and
-        # we drain a thread-safe queue. This avoids the user-side blocking
-        # ring-buffer read (PaUtil_ReadRingBuffer), which can segfault on macOS
-        # when devices change or two streams run at once. Resampling happens off
-        # the audio thread so the callback stays minimal.
-        import pyaudio
-        import audioop  # stdlib (py3.12); downmix + resample to 16 kHz mono
-        import queue as _queue
-        pa = pyaudio.PyAudio()
-        idx = self.d.device_index
-        if idx is None:
-            idx = pa.get_default_input_device_info()["index"]
-        info = pa.get_device_info_by_index(idx)
-        native_rate = int(info.get("defaultSampleRate", SEND_SAMPLE_RATE))
-        in_ch = min(2, int(info.get("maxInputChannels", 1)) or 1)
-
-        raw_q: _queue.Queue = _queue.Queue(maxsize=100)
-
-        def _cb(in_data, frame_count, time_info, status):
-            # Runs on PortAudio's audio thread — keep it minimal, never block.
-            try:
-                raw_q.put_nowait(in_data)
-            except _queue.Full:
-                pass  # consumer fell behind: drop this buffer rather than stall
-            flag = pyaudio.paComplete if self.stop_event.is_set() else pyaudio.paContinue
-            return (None, flag)
-
-        stream = await asyncio.to_thread(
-            pa.open,
-            format=pyaudio.paInt16,
-            channels=in_ch,
-            rate=native_rate,
-            input=True,
-            input_device_index=idx,
-            frames_per_buffer=CHUNK,
-            stream_callback=_cb,
-        )
-        rs_state = None
-        try:
-            while not self.stop_event.is_set():
-                if not stream.is_active():
-                    raise OSError("input stream stopped (device change?)")
-                try:
-                    data = await asyncio.to_thread(raw_q.get, True, 0.2)
-                except _queue.Empty:
-                    continue
-                if self.pause_event is not None and self.pause_event.is_set():
-                    continue  # paused: keep capturing but send nothing
-                if in_ch == 2:
-                    data = audioop.tomono(data, 2, 0.5, 0.5)
-                if native_rate != SEND_SAMPLE_RATE:
-                    data, rs_state = audioop.ratecv(
-                        data, 2, 1, native_rate, SEND_SAMPLE_RATE, rs_state)
-                await self._audio_q.put(data)
-        finally:
-            try:
-                stream.stop_stream()
-                stream.close()
-            except Exception:
-                pass
-            pa.terminate()
+        async for frame in _mic_frames(self.stop_event, self.pause_event, self.d.device_index):
+            await self._audio_q.put(frame)
 
     async def _produce_wav(self):
         wf = wave.open(self.d.wav_path, "rb")
@@ -283,6 +311,246 @@ class DirectionWorker:
                     out_buf = ""
 
 
+class ChunkedWorker:
+    """Cheap text-only engine. Segments the mic into utterances with an energy
+    VAD, sends each as one audio chunk to a generate_content model, and streams
+    back the translated text. No audio is generated and you pay per utterance
+    (not per second of silence). Same emit/stop/pause contract as DirectionWorker
+    so the relay/UI are unchanged.
+
+    Long-speech handling: flush on a silence gap OR at MAX_UTTER_MS, and on a
+    forced flush carry a short audio overlap into the next chunk so a mid-
+    sentence cut keeps context.
+    """
+    SR = SEND_SAMPLE_RATE          # 16 kHz mono (from _mic_frames)
+    RMS_THRESH = 500               # 16-bit energy threshold for "speech"
+    SILENCE_HANG_MS = 700          # trailing silence that ends an utterance
+    MAX_UTTER_MS = 7000            # force-flush long speech
+    CARRY_MS = 400                 # overlap kept after a forced flush
+    PREROLL_MS = 300               # audio kept before onset (avoid clipped starts)
+    MIN_UTTER_MS = 250             # ignore blips
+
+    def __init__(self, client, direction, emit, stop_event, pause_event, model):
+        self.client = client
+        self.d = direction
+        self.emit = emit
+        self.stop_event = stop_event
+        self.pause_event = pause_event
+        self.model = model
+        self._chunk_q: asyncio.Queue | None = None
+
+    async def run(self):
+        self._chunk_q = asyncio.Queue(maxsize=20)
+        self.emit("status", self.d.key, None, "● live", False)
+        try:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(self._capture_vad())
+                tg.create_task(self._translate_loop())
+                tg.create_task(self._stopper())
+        except Exception as eg:
+            if not self.stop_event.is_set():
+                excs = eg.exceptions if isinstance(eg, BaseExceptionGroup) else (eg,)
+                msg = "; ".join(sorted({repr(e) for e in excs}))
+                self.emit("error", self.d.key, None, f"engine error ({msg})", False)
+        self.emit("status", self.d.key, None, "stopped", False)
+
+    async def _stopper(self):
+        while not self.stop_event.is_set():
+            await asyncio.sleep(0.1)
+        raise _StopWorker
+
+    def _bpms(self) -> float:
+        return self.SR * 2 / 1000.0    # bytes per ms, 16-bit mono
+
+    async def _capture_vad(self):
+        import audioop
+        bpms = self._bpms()
+        buf = bytearray()
+        preroll = bytearray()
+        speaking = False
+        accum_ms = 0.0
+        silence_ms = 0.0
+        async for frame in _mic_frames(self.stop_event, self.pause_event, self.d.device_index):
+            ms = len(frame) / bpms
+            loud = audioop.rms(frame, 2) >= self.RMS_THRESH
+            if loud:
+                if not speaking:
+                    speaking = True
+                    buf.extend(preroll)             # include the onset we buffered
+                buf.extend(frame)
+                accum_ms += ms
+                silence_ms = 0.0
+                if accum_ms >= self.MAX_UTTER_MS:   # long run: flush, carry overlap
+                    await self._queue_chunk(buf)
+                    carry = bytes(buf[-int(self.CARRY_MS * bpms):])
+                    buf = bytearray(carry)
+                    accum_ms = self.CARRY_MS
+                    silence_ms = 0.0
+            else:
+                preroll.extend(frame)               # rolling pre-roll of recent quiet
+                cap = int(self.PREROLL_MS * bpms)
+                if len(preroll) > cap:
+                    del preroll[:-cap]
+                if speaking:
+                    buf.extend(frame)
+                    accum_ms += ms
+                    silence_ms += ms
+                    if silence_ms >= self.SILENCE_HANG_MS:
+                        await self._queue_chunk(buf)
+                        buf = bytearray()
+                        accum_ms = 0.0
+                        silence_ms = 0.0
+                        speaking = False
+        if speaking:                                # stop: flush the tail
+            await self._queue_chunk(buf)
+
+    async def _queue_chunk(self, pcm):
+        if len(pcm) / self._bpms() < self.MIN_UTTER_MS:
+            return
+        try:
+            self._chunk_q.put_nowait(bytes(pcm))
+        except asyncio.QueueFull:
+            pass   # translator behind: skip to stay live
+
+    async def _translate_loop(self):
+        from google.genai import types
+        tgt = self.d.target_language_code
+        instr = (
+            f"You are a real-time interpreter. Translate any human speech in the "
+            f"audio into {tgt}. Output ONLY the translated text — no quotes, "
+            f"labels, or notes. If the speech is already in {tgt}, return it "
+            f"verbatim. If there is no clear human speech (silence, noise, music, "
+            f"a tone, breathing), output nothing at all — an empty response.")
+        cfg = types.GenerateContentConfig(
+            system_instruction=instr, temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0))
+        while not self.stop_event.is_set():
+            pcm = await self._chunk_q.get()
+            await self._translate_one(pcm, cfg, types)
+
+    async def _translate_one(self, pcm, cfg, types):
+        audio = types.Part.from_bytes(data=_pcm_to_wav(pcm, self.SR), mime_type="audio/wav")
+        out = ""
+        try:
+            stream = await self.client.aio.models.generate_content_stream(
+                model=self.model, contents=[audio], config=cfg)
+            async for ch in stream:
+                t = getattr(ch, "text", None)
+                if t:
+                    out += t
+                    self.emit("update", self.d.key, "trans", out, False)
+            if out.strip():
+                self.emit("update", self.d.key, "trans", out.strip(), True)
+        except Exception as e:
+            self.emit("error", self.d.key, None, f"translate failed ({e!r})", False)
+
+
+def _oai_lang(code: str) -> str:
+    """OpenAI realtime-translate output language code (zh, en, nl, …)."""
+    return (code or "en").split("-")[0].lower()
+
+
+class OpenAIRealtimeWorker:
+    """Streaming translation via OpenAI gpt-realtime-translate (Realtime API).
+    Mic -> 24 kHz PCM16 base64 -> session.input_audio_buffer.append; reads
+    session.output_transcript.delta (incremental fragments) -> emits 'trans'.
+    There is no per-segment 'done' event, so a segment is finalized after
+    FINALIZE_S of no new delta. Same emit/stop/pause/teardown contract as the
+    other engines (TaskGroup + _stopper releases the mic on stop)."""
+    SR = OPENAI_SR
+    FINALIZE_S = 0.8               # seconds of no delta -> finalize the segment
+
+    def __init__(self, direction: Direction, emit, stop_event: threading.Event,
+                 pause_event: threading.Event | None = None,
+                 model: str = OPENAI_TRANSLATE_MODEL):
+        self.d = direction
+        self.emit = emit
+        self.stop_event = stop_event
+        self.pause_event = pause_event
+        self.model = model
+        self._seg = ""          # output (translated) transcript, current segment
+        self._seg_in = ""       # input (source) transcript, current segment
+        self._last_delta = 0.0
+
+    async def run(self):
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            self.emit("error", self.d.key, None, "no OPENAI_API_KEY (add it to .env)", False)
+            self.emit("status", self.d.key, None, "stopped", False)
+            return
+        url = f"wss://api.openai.com/v1/realtime/translations?model={self.model}"
+        backoff = 1.0
+        while not self.stop_event.is_set():
+            try:
+                import websockets
+                self.emit("status", self.d.key, None, "connecting…", False)
+                async with websockets.connect(
+                        url, additional_headers={"Authorization": f"Bearer {key}"},
+                        max_size=None) as ws:
+                    await ws.send(json.dumps({"type": "session.update", "session": {"audio": {
+                        "input": {"transcription": {"model": "gpt-4o-mini-transcribe"}},
+                        "output": {"language": _oai_lang(self.d.target_language_code)}}}}))
+                    self.emit("status", self.d.key, None, "● live", False)
+                    backoff = 1.0
+                    self._seg = self._seg_in = ""
+                    async with asyncio.TaskGroup() as tg:
+                        tg.create_task(self._send_audio(ws))
+                        tg.create_task(self._receive(ws))
+                        tg.create_task(self._finalizer())
+                        tg.create_task(self._stopper())
+            except Exception as eg:
+                if self.stop_event.is_set():
+                    break
+                excs = eg.exceptions if isinstance(eg, BaseExceptionGroup) else (eg,)
+                msg = "; ".join(sorted({repr(e) for e in excs}))
+                self.emit("error", self.d.key, None, f"reconnecting ({msg})", False)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 15.0)
+        self.emit("status", self.d.key, None, "stopped", False)
+
+    async def _stopper(self):
+        while not self.stop_event.is_set():
+            await asyncio.sleep(0.1)
+        raise _StopWorker
+
+    async def _send_audio(self, ws):
+        import base64
+        async for frame in _mic_frames(self.stop_event, self.pause_event,
+                                       self.d.device_index, out_rate=self.SR):
+            await ws.send(json.dumps({"type": "session.input_audio_buffer.append",
+                                      "audio": base64.b64encode(frame).decode()}))
+
+    async def _receive(self, ws):
+        loop = asyncio.get_running_loop()
+        async for raw in ws:
+            try:
+                m = json.loads(raw)
+            except Exception:
+                continue
+            t = m.get("type")
+            if t == "session.output_transcript.delta":
+                self._seg += m.get("delta", "")
+                self._last_delta = loop.time()
+                self.emit("update", self.d.key, "trans", self._seg, False)
+            elif t == "session.input_transcript.delta":
+                self._seg_in += m.get("delta", "")
+                self._last_delta = loop.time()
+                self.emit("update", self.d.key, "orig", self._seg_in, False)  # -> small grey "mine"
+            elif t == "error":
+                self.emit("error", self.d.key, None, str(m.get("error"))[:120], False)
+            # session.output_audio.delta is ignored (we want text only)
+
+    async def _finalizer(self):
+        loop = asyncio.get_running_loop()
+        while not self.stop_event.is_set():
+            await asyncio.sleep(0.2)
+            if self._seg and (loop.time() - self._last_delta) >= self.FINALIZE_S:
+                self.emit("update", self.d.key, "trans", self._seg.strip(), True)
+                if self._seg_in:
+                    self.emit("update", self.d.key, "orig", self._seg_in.strip(), True)
+                self._seg = self._seg_in = ""
+
+
 def make_client():
     from google import genai
     key = os.environ.get("GEMINI_API_KEY")
@@ -292,12 +560,26 @@ def make_client():
 
 
 def run_engine(directions: list[Direction], emit, stop_event: threading.Event,
-               pause_event: threading.Event | None = None):
-    """Run all directions concurrently in one asyncio loop (own thread)."""
+               pause_event: threading.Event | None = None,
+               engine: str = "chunked", model: str | None = None):
+    """Run all directions concurrently in one asyncio loop (own thread).
+    engine="chunked" = cheap audio->text (generate_content); "live" = streaming
+    Live API. `model` is the model for the ACTIVE engine (defaults per engine)."""
     async def _main():
-        client = make_client()
-        workers = [DirectionWorker(client, d, emit, stop_event, pause_event)
-                   for d in directions]
+        if engine == "openai":
+            om = model or OPENAI_TRANSLATE_MODEL
+            workers = [OpenAIRealtimeWorker(d, emit, stop_event, pause_event, om)
+                       for d in directions]
+        elif engine == "live":
+            client = make_client()
+            lm = model or MODEL
+            workers = [DirectionWorker(client, d, emit, stop_event, pause_event, live_model=lm)
+                       for d in directions]
+        else:
+            client = make_client()
+            cm = model or DEFAULT_CHUNK_MODEL
+            workers = [ChunkedWorker(client, d, emit, stop_event, pause_event, cm)
+                       for d in directions]
         await asyncio.gather(*(w.run() for w in workers))
     asyncio.run(_main())
 

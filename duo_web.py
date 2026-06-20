@@ -34,16 +34,27 @@ import translatebar as tb    # reuse engine + .env loader
 BAR_HTML = pathlib.Path(__file__).with_name("bar.html").read_text(encoding="utf-8")
 
 # Languages offered in the Settings dropdown (code -> human label).
-LANG_OPTIONS = [
+LANG_OPTIONS = [          # roughly by global usage; the on-bar strip pages 10 at a time
     ("en", "English"),
-    ("zh-Hans", "中文 (Simplified)"),
-    ("zh-Hant", "中文 (Traditional)"),
-    ("nl", "Nederlands"),
+    ("zh-Hans", "中文"),
     ("es", "Español"),
+    ("hi", "हिन्दी"),
+    ("ar", "العربية"),
     ("fr", "Français"),
+    ("pt", "Português"),
+    ("ru", "Русский"),
     ("de", "Deutsch"),
     ("ja", "日本語"),
     ("ko", "한국어"),
+    ("nl", "Nederlands"),
+    ("it", "Italiano"),
+    ("tr", "Türkçe"),
+    ("pl", "Polski"),
+    ("id", "Indonesia"),
+    ("vi", "Tiếng Việt"),
+    ("th", "ไทย"),
+    ("uk", "Українська"),
+    ("sv", "Svenska"),
 ]
 LANG_LABELS = dict(LANG_OPTIONS)
 
@@ -79,7 +90,7 @@ class Workers:
     def _emit(self, kind, dkey, field_, text, finished):
         if kind == "update":
             if field_ == "orig":
-                self.ui_q.put(("mine", text))
+                self.ui_q.put(("mine", (text, bool(finished))))
             elif field_ == "trans":
                 self.out_q.put({"type": "caption", "text": text, "final": bool(finished)})
 
@@ -133,8 +144,13 @@ class Workers:
             key="OUT", title=cfg["name"], target_language_code=cfg["target"],
             color="#79c0ff", source="mic", device_index=cfg.get("mic_index"),
         )
+        engine = cfg.get("engine", "live")
+        model = (cfg.get("openai_model") if engine == "openai"
+                 else cfg.get("live_model") if engine == "live"
+                 else tb.DEFAULT_CHUNK_MODEL)
         self.engine_t = threading.Thread(
-            target=tb.run_engine, args=([direction], self._emit, se, self.pause_event),
+            target=tb.run_engine,
+            args=([direction], self._emit, se, self.pause_event, engine, model),
             daemon=True)
         self.engine_t.start()
         self.relay_t = threading.Thread(
@@ -168,10 +184,10 @@ class Workers:
 def _label_payload(cfg):
     return {"name": cfg["name"], "peer": cfg["peer_name"],
             "target_label": LANG_LABELS.get(cfg["target"], cfg["target"]),
-            "room": cfg["room"]}
+            "target_code": cfg["target"], "room": cfg["room"]}
 
 
-def run_app(cfg, slot=0):
+def run_app(cfg, slot=0, skip_wizard=False):
     ui_q: queue.Queue = queue.Queue()
     out_q: queue.Queue = queue.Queue()
     pause_event = threading.Event()
@@ -200,6 +216,15 @@ def run_app(cfg, slot=0):
         except Exception:
             pass
 
+    def layout_mini():
+        try:
+            scr = webview.screens[0]
+            w, h = 210, 72
+            window.resize(w, h)
+            window.move(scr.width - w - 24, scr.height - h - 48)   # bottom-right corner
+        except Exception:
+            pass
+
     class Api:
         def ready(self):
             ready_event.set()
@@ -209,6 +234,14 @@ def run_app(cfg, slot=0):
                 pause_event.clear()
                 return False
             pause_event.set()
+            return True
+
+        def minimize(self):           # power tile -> shrink to the corner pill (engine keeps running)
+            layout_mini()
+            return True
+
+        def restore(self):            # pill ⤢ -> back to the full bar
+            layout_bar()
             return True
 
         def quit(self):
@@ -252,7 +285,9 @@ def run_app(cfg, slot=0):
                 "name": cfg["name"], "peer_name": cfg["peer_name"],
                 "target": cfg["target"], "mic_index": cfg["mic_index"],
                 "relay": cfg["relay"], "room": cfg["room"],
-                "has_key": appconfig.has_key(),
+                "engine": cfg["engine"],
+                "has_gemini_key": appconfig.has_key(appconfig.KEY_VAR),
+                "has_openai_key": appconfig.has_key(appconfig.OPENAI_KEY_VAR),
                 "langs": [{"code": c, "label": l} for c, l in LANG_OPTIONS],
                 "mics": tb.list_input_devices(),
             }
@@ -265,10 +300,23 @@ def run_app(cfg, slot=0):
             layout_bar()
             return True
 
-        def open_key_help(self):
+        def open_key_help(self, engine="live"):
             import webbrowser
-            webbrowser.open("https://aistudio.google.com/apikey")
+            url = ("https://platform.openai.com/api-keys" if engine == "openai"
+                   else "https://aistudio.google.com/apikey")
+            webbrowser.open(url)
             return True
+
+        def set_target(self, code):
+            try:
+                cfg["target"] = code or cfg["target"]
+                appconfig.save(cfg)
+                if cfg["room"] and not workers.restart(cfg, cfg["room"]):
+                    return {"ok": False, "error": "couldn't restart cleanly"}
+                ui_q.put(("relabel", _label_payload(cfg)))
+                return {"ok": True}
+            except Exception as e:
+                return {"ok": False, "error": repr(e)}
 
         def save_settings(self, payload):
             try:
@@ -279,13 +327,17 @@ def run_app(cfg, slot=0):
                 cfg["mic_index"] = int(mi) if str(mi).lstrip("-").isdigit() else None
                 cfg["relay"] = (payload.get("relay") or "").strip()
                 cfg["room"] = (payload.get("room") or "").strip()
+                cfg["engine"] = payload.get("engine") or cfg["engine"]
                 key = (payload.get("key") or "").strip()
+                key_var = (appconfig.OPENAI_KEY_VAR if cfg["engine"] == "openai"
+                           else appconfig.KEY_VAR)
                 if key:
-                    appconfig.set_key(key)
+                    appconfig.set_key(key, key_var)
                 appconfig.save(cfg)
 
-                if not appconfig.has_key():
-                    return {"ok": False, "error": "Enter your Gemini API key."}
+                if not appconfig.has_key(key_var):
+                    need = "OpenAI" if cfg["engine"] == "openai" else "Gemini"
+                    return {"ok": False, "error": f"Enter your {need} API key."}
                 if not cfg["relay"]:
                     return {"ok": False, "error": "No connection yet — start hosting or paste an invite."}
                 if not cfg["room"]:
@@ -301,7 +353,7 @@ def run_app(cfg, slot=0):
 
     window = webview.create_window(
         "TranslateBar", html=BAR_HTML, js_api=Api(),
-        frameless=True, on_top=True, transparent=True, easy_drag=True,
+        frameless=True, on_top=True, transparent=True, easy_drag=False,
         width=1200, height=200,
     )
 
@@ -318,10 +370,17 @@ def run_app(cfg, slot=0):
         p = _label_payload(cfg)
         js(f"setLabels({json.dumps(p['name'])},{json.dumps(p['peer'])},"
            f"{json.dumps(p['target_label'])},{json.dumps(p['room'])})")
+        js(f"initLang({json.dumps([{'code': c, 'label': l} for c, l in LANG_OPTIONS])},"
+           f"{json.dumps(cfg['target'])})")
 
-        # Always run the wizard at launch (it sets up this meeting's connection);
-        # its Start button persists the config + starts the workers.
-        js("startWizard()")
+        # Normally run the wizard at launch (it sets up the connection + starts
+        # the workers). For scripted/local use (--room given on the CLI) skip it
+        # and auto-start, so the 2-bar local demo needs no clicking.
+        _kv = appconfig.OPENAI_KEY_VAR if cfg.get("engine") == "openai" else appconfig.KEY_VAR
+        if skip_wizard and appconfig.has_key(_kv) and cfg["relay"] and cfg["room"]:
+            workers.start(cfg, cfg["room"])
+        else:
+            js("startWizard()")
 
         last_conn = None
         while True:                   # app lifetime; quit() does os._exit
@@ -335,7 +394,8 @@ def run_app(cfg, slot=0):
                 txt, fin = payload
                 js(f"pushPeer({json.dumps(txt)}, {str(fin).lower()})")
             elif ch == "mine":
-                js(f"pushMine({json.dumps(payload[-400:])})")
+                txt, fin = payload
+                js(f"pushMine({json.dumps(txt)}, {str(fin).lower()})")
             elif ch == "conn":
                 connected = state["peers"] >= 2
                 if connected != last_conn:
@@ -345,6 +405,7 @@ def run_app(cfg, slot=0):
                 pl = payload
                 js(f"setLabels({json.dumps(pl['name'])},{json.dumps(pl['peer'])},"
                    f"{json.dumps(pl['target_label'])},{json.dumps(pl['room'])})")
+                js(f"setLangTarget({json.dumps(pl['target_code'])})")
                 last_conn = None      # re-push link state after a restart
 
     webview.start(pump)
@@ -359,9 +420,15 @@ def main():
     ap.add_argument("--name", default=None)
     ap.add_argument("--peer-name", default=None)
     ap.add_argument("--slot", type=int, default=0, help="stack position for local testing")
+    ap.add_argument("--engine", default=None, help="chunked | live (overrides config)")
+    ap.add_argument("--model", default=None, help="chunked-engine model (overrides config)")
     args = ap.parse_args()
 
     cfg = appconfig.load()            # CLI args override persisted config (session-only)
+    if args.engine:
+        cfg["engine"] = args.engine
+    if args.model:
+        cfg["openai_model" if cfg["engine"] == "openai" else "live_model"] = args.model
     if args.name:
         cfg["name"] = args.name
     if args.peer_name:
@@ -375,7 +442,7 @@ def main():
     if args.mic_device:
         cfg["mic_index"] = tb.resolve_device(args.mic_device)
 
-    run_app(cfg, slot=args.slot)
+    run_app(cfg, slot=args.slot, skip_wizard=(args.room is not None))
 
 
 if __name__ == "__main__":

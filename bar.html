@@ -21,9 +21,8 @@
     justify-content:flex-end;overflow:hidden;}
   .peer{font-size:22px;font-weight:700;line-height:28px;color:#7ee787;
     white-space:pre;}
-  .mine{font-size:13px;line-height:1.25;color:#6e7681;
-    white-space:pre-wrap;word-break:break-word;max-height:2.6em;overflow:hidden;
-    margin-top:4px;}
+  .mine{font-size:13px;line-height:1.3;color:#6e7681;
+    white-space:pre;overflow:hidden;margin-top:4px;}
 
   /* right: control panel */
   .panel{display:flex;flex-direction:column;align-items:center;gap:7px;
@@ -47,9 +46,49 @@
   .tile.on svg{stroke:#e6edf3;}
   .green{--c:var(--green);} .amber{--c:var(--amber);}
   .red{--c:var(--red);} .blue{--c:var(--blue);}
-  .link.searching::before{--c:var(--neutral);animation:pulse 0.9s ease-in-out infinite;}
-  .link.connected::before{--c:var(--green);opacity:.55;animation:none;}
   @keyframes pulse{0%,100%{opacity:.15}50%{opacity:.62}}
+
+  /* language tile (replaces the old link tile) */
+  .lang{--c:var(--blue);}
+  .lang span{font-size:19px;font-weight:700;color:#c9d1d9;z-index:1;}
+  .lang:hover span{color:#e6edf3;}
+
+  /* link glyph in the status line (replaces the "·") */
+  .lk{display:inline-block;vertical-align:-2px;margin:0 5px;}
+  .lk svg{width:13px;height:13px;fill:none;stroke-width:2.4;
+    stroke-linecap:round;stroke-linejoin:round;}
+  .lk.linked svg{stroke:var(--green);}
+  .lk.pairing{animation:pulse 0.9s ease-in-out infinite;}
+  .lk.pairing svg{stroke:var(--neutral);}
+
+  /* language picker strip (over the caption area) */
+  .langstrip{position:absolute;left:14px;right:168px;bottom:10px;z-index:8;
+    display:none;gap:6px;align-items:center;flex-wrap:nowrap;overflow:hidden;
+    background:rgba(13,17,23,.97);border:1px solid rgba(255,255,255,.10);
+    border-radius:8px;padding:6px 8px;box-shadow:0 8px 28px rgba(0,0,0,.5);}
+  .langstrip.show{display:flex;}
+  .lang-chip{font-size:13px;color:#c9d1d9;background:#161b22;white-space:nowrap;
+    border:1px solid rgba(255,255,255,.10);border-radius:6px;padding:5px 10px;cursor:pointer;}
+  .lang-chip:hover{background:#1b222c;}
+  .lang-chip.cur{border-color:var(--green);color:#7ee787;}
+  .lang-next{margin-left:auto;cursor:pointer;color:#8b949e;padding:4px 8px;
+    font-size:18px;font-weight:700;}
+  .lang-next:hover{color:#e6edf3;}
+
+  /* minimized pill (bottom-right corner) — engine keeps running */
+  #mini{display:none;position:fixed;right:10px;bottom:10px;
+    flex-direction:column;align-items:stretch;gap:5px;
+    background:rgba(13,17,23,.97);border:1px solid rgba(255,255,255,.12);
+    border-radius:10px;padding:7px 9px;box-shadow:0 10px 30px rgba(0,0,0,.55);}
+  body.mini .bar{display:none;}
+  body.mini #mini{display:flex;}
+  #mini .status{text-align:center;}
+  .mini-btns{display:flex;gap:6px;}
+  .mini-b{flex:1;display:grid;place-items:center;height:30px;border-radius:6px;
+    background:#161b22;border:1px solid rgba(255,255,255,.10);color:#c9d1d9;
+    cursor:pointer;font-size:15px;line-height:1;}
+  .mini-b:hover{background:#1b222c;color:#e6edf3;}
+  .mini-x:hover{background:#3a1417;border-color:var(--red);color:#ff7b72;}
 
   /* settings panel — fills the window once it grows to card size */
   .settings{position:fixed;inset:0;background:rgba(13,17,23,.985);z-index:20;
@@ -95,7 +134,7 @@
 </head>
 <body>
   <div class="bar">
-    <div class="captions">
+    <div class="captions pywebview-drag-region">
       <div class="peer-wrap"><div class="peer" id="peer"></div></div>
       <div class="mine" id="mine"></div>
     </div>
@@ -105,16 +144,25 @@
         <div class="tile on green" id="pp" onclick="togglePause()">
           <svg id="ppicon" viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20" fill="#e6edf3" stroke="none"/></svg>
         </div>
-        <div class="tile indicator link searching" id="link">
-          <svg viewBox="0 0 24 24"><path d="M9 15l6-6"/><path d="M11 7l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M13 17l-1 1a4 4 0 0 1-6-6l1-1"/></svg>
+        <div class="tile lang" id="lang" title="translation language" onclick="toggleLangStrip()">
+          <span id="langCode">EN</span>
         </div>
         <div class="tile blue" id="settings" title="settings" onclick="toggleSettings()">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L14.5 3h-5l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h5l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5a7 7 0 0 0 .1-1z"/></svg>
         </div>
-        <div class="tile red" id="power" onclick="requestClose()">
+        <div class="tile red" id="power" title="minimize" onclick="minimize()">
           <svg viewBox="0 0 24 24"><path d="M12 4v8"/><path d="M7 7a8 8 0 1 0 10 0"/></svg>
         </div>
       </div>
+    </div>
+    <div class="langstrip" id="langStrip"></div>
+  </div>
+
+  <div id="mini">
+    <span class="status pywebview-drag-region" id="miniStatus"></span>
+    <div class="mini-btns">
+      <span class="mini-b" onclick="restoreBar()" title="open">⤢</span>
+      <span class="mini-b mini-x" onclick="quitApp()" title="close">✕</span>
     </div>
   </div>
 
@@ -126,7 +174,10 @@
       <div class="s-row"><label>Talking to</label><input id="fPeer" type="text"></div>
       <div class="s-row"><label>Translate to</label><select id="fTarget"></select></div>
       <div class="s-row"><label>Microphone</label><select id="fMic"></select></div>
-      <div class="s-row"><label>Gemini API key</label><input id="fKey" type="password" autocomplete="off"></div>
+      <div class="s-row"><label>Engine</label><select id="fEngine" onchange="onEngineChange()">
+        <option value="live">Gemini — streaming (~€1.26/h)</option>
+        <option value="openai">OpenAI — streaming, premium (~€2/h)</option></select></div>
+      <div class="s-row"><label id="fKeyLabel">Gemini API key</label><input id="fKey" type="password" autocomplete="off"></div>
       <span class="s-link" onclick="keyHelp()">How do I get a key? ↗</span>
       <div class="s-row"><label>Relay URL</label><input id="fRelay" type="text" placeholder="wss://…"></div>
       <div class="s-row"><label>Meeting / room</label><input id="fRoom" type="text" placeholder="abc-defg-hij"></div>
@@ -185,9 +236,14 @@
       if (closeArmed) return;
       const pC = live ? 'var(--green)' : 'var(--amber)';
       const lC = linked ? 'var(--green)' : 'var(--neutral)';
-      document.getElementById('status').innerHTML =
-        `<span style="color:${pC}">${live ? 'live' : 'paused'}</span> · ` +
+      const glyph = `<span class="lk ${linked ? 'linked' : 'pairing'}"><svg viewBox="0 0 24 24">`
+        + `<path d="M9 15l6-6"/><path d="M11 7l1-1a4 4 0 0 1 6 6l-1 1"/>`
+        + `<path d="M13 17l-1 1a4 4 0 0 1-6-6l1-1"/></svg></span>`;
+      const html = `<span style="color:${pC}">${live ? 'live' : 'paused'}</span>` + glyph +
         `<span style="color:${lC}">${linked ? 'linked' : 'pairing…'}</span>`;
+      document.getElementById('status').innerHTML = html;
+      const ms = document.getElementById('miniStatus');
+      if (ms) ms.innerHTML = html;          // keep the minimized pill's status in sync
     }
     // --- pushed from Python ---
     let curRouting = {name:"You", peer:"Team", targetLabel:"", room:""};
@@ -206,8 +262,8 @@
       const s = getComputedStyle(peerEl);
       return `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
     }
-    function wrapLines(text, maxW){
-      meas.font = peerFont();
+    function wrapLines(text, maxW, font){
+      meas.font = font;
       const lines = []; let cur = "";
       for (const tok of (text.match(/\s+|\S+/g) || [])){
         if (/^\s+$/.test(tok)){                       // whitespace -> collapse to one space
@@ -229,9 +285,13 @@
     function renderPeer(){
       const maxW = peerWrap.clientWidth;
       if (maxW <= 0) return;
-      const lines = wrapLines((pFinal + " " + pLive).trim(), maxW);
+      const lines = wrapLines((pFinal + " " + pLive).trim(), maxW, peerFont());
       const cap = Math.max(1, Math.floor(peerWrap.clientHeight / LH));
       peerEl.textContent = lines.slice(-cap).join("\n");
+    }
+    function mineFont(){
+      const s = getComputedStyle(document.getElementById('mine'));
+      return `${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
     }
     function pushPeer(text, final){
       if (final){
@@ -241,14 +301,69 @@
       } else { pLive = text; }
       renderPeer();
     }
-    function pushMine(text){ document.getElementById('mine').textContent = text; }
-    window.addEventListener('resize', renderPeer);
-    function setLink(connected){
-      linked = connected;
-      document.getElementById('link').className =
-        'tile indicator link ' + (connected ? 'connected' : 'searching');
-      renderStatus();
+    // small grey source check — SAME typewriter roll as peer, capped at 2 lines
+    let mFinal = "", mLive = "";
+    function renderMine(){
+      const el = document.getElementById('mine');
+      const maxW = el.clientWidth;
+      if (maxW <= 0) return;
+      const lines = wrapLines((mFinal + " " + mLive).trim(), maxW, mineFont());
+      el.textContent = lines.slice(-2).join("\n");   // newest 2 lines; older roll off the top
     }
+    function pushMine(text, final){
+      if (final){
+        mFinal = (mFinal + " " + text).trim();
+        if (mFinal.length > 2000) mFinal = mFinal.slice(-2000);
+        mLive = "";
+      } else { mLive = text; }
+      renderMine();
+    }
+    window.addEventListener('resize', () => { renderPeer(); renderMine(); });
+    function setLink(connected){ linked = connected; renderStatus(); }
+
+    // --- minimize / restore / quit (power tile = minimize; quit lives in the pill) ---
+    function minimize(){
+      document.body.classList.add('mini');
+      if (window.pywebview) window.pywebview.api.minimize();
+    }
+    function restoreBar(){
+      document.body.classList.remove('mini');
+      if (window.pywebview) window.pywebview.api.restore();
+    }
+    function quitApp(){ if (window.pywebview) window.pywebview.api.quit(); }
+
+    // --- language selector (the tile that replaced the link indicator) ---
+    let langData = [], curTarget = "en", langPage = 0;
+    const LANGS_PER_PAGE = 10;
+    function langCode(t){ return (t || "en").split('-')[0].toUpperCase(); }
+    function renderLangTile(){ document.getElementById('langCode').textContent = langCode(curTarget); }
+    function initLang(langs, target){ langData = langs || []; curTarget = target || "en"; renderLangTile(); }
+    function setLangTarget(code){ if (code){ curTarget = code; renderLangTile(); } }
+    function renderLangStrip(){
+      const pages = Math.max(1, Math.ceil(langData.length / LANGS_PER_PAGE));
+      const start = (langPage % pages) * LANGS_PER_PAGE;
+      let html = langData.slice(start, start + LANGS_PER_PAGE).map(l =>
+        `<span class="lang-chip${l.code===curTarget ? ' cur' : ''}" onclick="pickLang('${l.code}')">${l.label}</span>`
+      ).join('');
+      if (pages > 1) html += `<span class="lang-next" onclick="nextLangPage()">›</span>`;
+      document.getElementById('langStrip').innerHTML = html;
+    }
+    function nextLangPage(){ langPage++; renderLangStrip(); }
+    function toggleLangStrip(){
+      const s = document.getElementById('langStrip');
+      if (s.classList.contains('show')){ s.classList.remove('show'); return; }
+      langPage = 0; renderLangStrip(); s.classList.add('show');
+    }
+    function pickLang(code){
+      curTarget = code; renderLangTile();
+      document.getElementById('langStrip').classList.remove('show');
+      if (window.pywebview) window.pywebview.api.set_target(code);
+    }
+    document.addEventListener('click', e=>{       // click outside the strip closes it
+      const s = document.getElementById('langStrip');
+      if (s.classList.contains('show') && !e.target.closest('#langStrip') && !e.target.closest('#lang'))
+        s.classList.remove('show');
+    });
     // --- settings panel ---
     function val(id){ return document.getElementById(id).value; }
     function panelOpen(){ return document.getElementById('settingsPanel').classList.contains('show'); }
@@ -291,7 +406,7 @@
       document.getElementById('wzShare').style.display='none';
       wizRole=null; wizRelay=null; wizRoom=''; wizKey=''; hostStarted=false;
       wizSteps = [];
-      if (!wizData.has_key) wizSteps.push('wzKey');
+      if (!wizData.has_gemini_key) wizSteps.push('wzKey');  // wizard uses the default Gemini engine
       wizSteps.push('wzConnect','wzReady');
       wizIdx = 0;
       document.getElementById('wzErr').textContent='';
@@ -394,21 +509,33 @@
         (mics||[]).map(m =>
           `<option value="${m.index}"${String(m.index)===sel?' selected':''}>${m.name}</option>`).join('');
     }
+    let sData = {};
+    function applyKeyFieldForEngine(engine){    // label/placeholder follow the chosen engine
+      const isO = engine === 'openai';
+      document.getElementById('fKeyLabel').textContent = isO ? 'OpenAI API key' : 'Gemini API key';
+      const has = isO ? sData.has_openai_key : sData.has_gemini_key;
+      const k = document.getElementById('fKey');
+      k.value = '';
+      k.placeholder = has ? 'saved — leave blank to keep'
+                          : (isO ? 'paste your OpenAI key' : 'paste your Gemini key');
+    }
+    function onEngineChange(){ applyKeyFieldForEngine(document.getElementById('fEngine').value); }
     function populateSettings(s){
+      sData = s;
       document.getElementById('fName').value = s.name || '';
       document.getElementById('fPeer').value = s.peer_name || '';
       fillLangs('fTarget', s.langs, s.target);
       fillMics('fMic', s.mics, s.mic_index);
+      document.getElementById('fEngine').value = s.engine || 'live';
       document.getElementById('fRelay').value = s.relay || '';
       document.getElementById('fRoom').value = s.room || '';
-      const key = document.getElementById('fKey');
-      key.value = '';
-      key.placeholder = s.has_key ? 'saved — leave blank to keep' : 'paste your Gemini API key';
+      applyKeyFieldForEngine(s.engine || 'live');
     }
     async function saveSettings(){
       const payload = {
         name: val('fName'), peer_name: val('fPeer'), target: val('fTarget'),
-        mic_index: val('fMic'), relay: val('fRelay'), room: val('fRoom'), key: val('fKey'),
+        mic_index: val('fMic'), relay: val('fRelay'), room: val('fRoom'),
+        engine: val('fEngine'), key: val('fKey'),
       };
       const err = document.getElementById('sErr');
       err.textContent = 'Saving…';
@@ -417,7 +544,7 @@
       if (res && res.ok){ err.textContent=''; closeSettings(); }
       else { err.textContent = (res && res.error) || 'Something went wrong.'; }
     }
-    function keyHelp(){ if (window.pywebview) window.pywebview.api.open_key_help(); }
+    function keyHelp(){ if (window.pywebview) window.pywebview.api.open_key_help(document.getElementById('fEngine').value); }
     // --- user actions ---
     function renderPause(){
       document.getElementById('pp').className = 'tile on ' + (live ? 'green' : 'amber');

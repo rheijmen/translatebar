@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Headless: restart the engine+relay several times and prove each stop() fully
-joins (threads die) — so a restart never layers a second mic stream on a live
-one (the old PortAudio segfault). Uses the real mic + engine; the relay points
-at a dead address on purpose (we're testing teardown, not the relay). No GUI."""
+"""Headless: restart the (chunked) engine + relay several times and prove each
+stop() fully joins — so a restart never layers a second mic stream on a live one
+(the old PortAudio segfault). Uses a DUMMY key so the client builds and the
+mic-capture/VAD task runs; the actual translate calls fail and are swallowed —
+we're testing teardown, not translation. No GUI, no network for the relay."""
+import os
 import queue
 import threading
 import time
+
+# force a non-empty key so make_client() builds (the real .env may be empty);
+# this only touches THIS process's env, never the .env file.
+os.environ["GEMINI_API_KEY"] = "dummy-test-key-not-real"
 
 import appconfig
 import duo_web
@@ -14,6 +20,7 @@ import duo_web
 def main():
     cfg = appconfig.load()
     cfg["relay"] = "ws://127.0.0.1:9"          # nothing there -> relay just backs off
+    cfg["engine"] = "chunked"
     ui_q, out_q = queue.Queue(), queue.Queue()
     pause = threading.Event()
     state = {"peers": 0}
