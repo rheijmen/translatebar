@@ -4,9 +4,11 @@ cloudflared tunnel, and hand back the wss:// URL to share. Used by the in-app
 wizard (duo_web) and by host.py."""
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -14,9 +16,27 @@ import threading
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
-PY = sys.executable
 DEFAULT_PORT = os.environ.get("RELAY_PORT", "8765")
 URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+
+def _cloudflared_path() -> str | None:
+    """The cloudflared binary: bundled inside the .app when frozen, else on PATH."""
+    if getattr(sys, "frozen", False):
+        p = pathlib.Path(getattr(sys, "_MEIPASS", HERE)) / "cloudflared"
+        if p.exists():
+            return str(p)
+    return shutil.which("cloudflared")
+
+
+def _run_relay() -> None:
+    """Run the relay server in-process (a thread) — a packaged .app has no
+    separate python to spawn relay.py as a subprocess."""
+    import relay
+    try:
+        asyncio.run(relay.main())
+    except Exception:
+        pass
 
 
 def port_busy(port: str) -> bool:
@@ -41,10 +61,14 @@ class Host:
         return p
 
     def start(self, timeout: float = 25.0) -> str | None:
-        if subprocess.run(["which", "cloudflared"], capture_output=True).returncode != 0:
-            raise RuntimeError("cloudflared is not installed (brew install cloudflared)")
+        cf = _cloudflared_path()
+        if not cf:
+            raise RuntimeError(
+                "cloudflared not found (it ships inside the app; for a dev run: "
+                "brew install cloudflared)")
         if not port_busy(self.port):
-            self._spawn([PY, str(HERE / "relay.py")])
+            os.environ.setdefault("RELAY_PORT", str(self.port))
+            threading.Thread(target=_run_relay, daemon=True).start()   # in-process relay
             time.sleep(1.0)
         found = {"url": None}
 
@@ -55,7 +79,7 @@ class Host:
                     if m:
                         found["url"] = m.group(0)
 
-        tun = self._spawn(["cloudflared", "tunnel", "--url", f"http://localhost:{self.port}"])
+        tun = self._spawn([cf, "tunnel", "--url", f"http://localhost:{self.port}"])
         threading.Thread(target=watch, args=(tun,), daemon=True).start()
 
         waited = 0.0

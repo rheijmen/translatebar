@@ -36,12 +36,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Download cloudflared (bundled so the app can host)
+        run: |
+          mkdir -p vendor
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz -o cf.tgz
+          tar xzf cf.tgz -C vendor/
+          chmod +x vendor/cloudflared
+
       - name: Build LiveTranslateBar.app
         run: |
           pyinstaller --windowed --name LiveTranslateBar \
             --icon assets/LiveTranslateBar.icns \
             --add-data "bar.html:." \
             --add-data "assets:assets" \
+            --add-binary "vendor/cloudflared:." \
             --collect-all webview \
             --collect-all google.genai \
             --noconfirm duo_web.py
