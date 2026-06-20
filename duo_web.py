@@ -24,6 +24,7 @@ import queue
 import secrets
 import subprocess
 import threading
+import time
 
 import webview
 
@@ -91,10 +92,18 @@ class Workers:
         self.stop_event: threading.Event | None = None
         self.engine_t: threading.Thread | None = None
         self.relay_t: threading.Thread | None = None
+        self.active_secs = 0.0       # cumulative engine-on time this app session
+        self._t0: float | None = None  # monotonic start of the current run
 
     @property
     def running(self) -> bool:
         return self.stop_event is not None
+
+    def current_run_secs(self) -> float:
+        return (time.monotonic() - self._t0) if self._t0 is not None else 0.0
+
+    def total_secs(self) -> float:
+        return self.active_secs + self.current_run_secs()
 
     def _emit(self, kind, dkey, field_, text, finished):
         if kind == "update":
@@ -154,6 +163,7 @@ class Workers:
 
     def start(self, cfg, room_key):
         self.stop_event = threading.Event()
+        self._t0 = time.monotonic()
         self.state["peers"] = 0
         self.pause_event.clear()
         se = self.stop_event
@@ -179,6 +189,9 @@ class Workers:
         the caller must then NOT start a new engine (would risk two mic streams)."""
         if self.stop_event is None:
             return True
+        if self._t0 is not None:                       # bank this run's active time
+            self.active_secs += time.monotonic() - self._t0
+            self._t0 = None
         self.stop_event.set()
         ok = True
         for t in (self.engine_t, self.relay_t):
@@ -328,6 +341,7 @@ def run_app(cfg, slot=0, skip_wizard=False):
                 "target": cfg["target"], "mic_index": cfg["mic_index"],
                 "relay": cfg["relay"], "room": cfg["room"],
                 "engine": cfg["engine"],
+                "session_secs": int(workers.total_secs()),
                 "has_gemini_key": appconfig.has_key(appconfig.KEY_VAR),
                 "has_openai_key": appconfig.has_key(appconfig.OPENAI_KEY_VAR),
                 "langs": [{"code": c, "label": l} for c, l in LANG_OPTIONS],
@@ -430,11 +444,30 @@ def run_app(cfg, slot=0, skip_wizard=False):
             js("startWizard()")
 
         last_conn = None
+        last_activity = time.monotonic()
+        prev_running = False
+        IDLE_SECS, MAX_RUN_SECS = 300, 7200        # auto-pause after 5 min idle / 2 h
         while True:                   # app lifetime; quit() does os._exit
+            running = workers.running
+            if running and not prev_running:        # (re)started -> reset the idle clock
+                last_activity = time.monotonic()
+            prev_running = running
+            if running:                            # cost-safety: auto-pause = close session
+                now = time.monotonic()
+                reason = ("idle" if now - last_activity > IDLE_SECS
+                          else "2h — still there?" if workers.current_run_secs() > MAX_RUN_SECS
+                          else None)
+                if reason:
+                    workers.stop()
+                    state["peers"] = 0
+                    last_conn = None
+                    js(f"setPaused({json.dumps(reason)})")
             try:
                 ch, payload = ui_q.get(timeout=0.2)
             except queue.Empty:
                 continue
+            if ch in ("peer", "mine"):
+                last_activity = time.monotonic()
             if pause_event.is_set() and ch in ("peer", "mine"):
                 continue              # paused: freeze display, drop backlog
             if ch == "peer":
@@ -470,6 +503,16 @@ def main():
     ap.add_argument("--engine", default=None, help="chunked | live (overrides config)")
     ap.add_argument("--model", default=None, help="chunked-engine model (overrides config)")
     args = ap.parse_args()
+
+    # single-instance guard: bind a loopback port (per --slot, so the local 2-bar
+    # demo with slot 0/1 still works). A 2nd real launch (same slot) exits.
+    import socket
+    _lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _lock.bind(("127.0.0.1", 8770 + args.slot))
+    except OSError:
+        print("LiveTranslateBar is already running.", file=sys.stderr)
+        sys.exit(0)
 
     cfg = appconfig.load()            # CLI args override persisted config (session-only)
     if args.engine:

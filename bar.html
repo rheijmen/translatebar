@@ -104,6 +104,8 @@
     color:#6e7681;text-align:center;text-transform:uppercase;}
   .credit .site{color:var(--blue);cursor:pointer;text-transform:none;}
   .credit .site:hover{text-decoration:underline;}
+  .s-usage{font-size:11px;color:#8b949e;font-family:ui-monospace,Menlo,monospace;
+    letter-spacing:.3px;margin-top:-3px;}
   .s-close{cursor:pointer;color:#8b949e;font-size:15px;padding:2px 6px;}
   .s-close:hover{color:#e6edf3;}
   .s-hint{font-size:12px;color:var(--amber);margin-bottom:6px;display:none;}
@@ -185,6 +187,7 @@
       <div class="s-row"><label>Engine</label><select id="fEngine" onchange="onEngineChange()">
         <option value="live">Gemini — streaming (~€1.26/h)</option>
         <option value="openai">OpenAI — streaming, premium (~€2/h)</option></select></div>
+      <div class="s-usage" id="sUsage"></div>
       <div class="s-row"><label id="fKeyLabel">Gemini API key</label><input id="fKey" type="password" autocomplete="off"></div>
       <span class="s-link" onclick="keyHelp()">How do I get a key? ↗</span>
       <div class="s-row"><label>Relay URL</label><input id="fRelay" type="text" placeholder="wss://…"></div>
@@ -552,6 +555,9 @@
       document.getElementById('fRelay').value = s.relay || '';
       document.getElementById('fRoom').value = s.room || '';
       applyKeyFieldForEngine(s.engine || 'live');
+      const secs = s.session_secs || 0, h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+      document.getElementById('sUsage').textContent =
+        '⏱ engine on this session: ' + (h ? h + 'h ' : '') + m + 'm';
     }
     async function saveSettings(){
       const payload = {
