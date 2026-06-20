@@ -31,7 +31,16 @@ import appconfig
 import hosting               # in-app "Start hosting" (relay + cloudflared tunnel)
 import translatebar as tb    # reuse engine + .env loader
 
-BAR_HTML = pathlib.Path(__file__).with_name("bar.html").read_text(encoding="utf-8")
+import sys
+# Resource base: the PyInstaller bundle dir when frozen, else the script dir.
+_RES = pathlib.Path(getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent))
+BAR_HTML = (_RES / "bar.html").read_text(encoding="utf-8")
+try:                                  # embed the brand logo as a data URI (html is loaded as a string, no base path)
+    import base64 as _b64
+    _logo = (_RES / "assets" / "logo_white.png").read_bytes()
+    BAR_HTML = BAR_HTML.replace("__LOGO__", "data:image/png;base64," + _b64.b64encode(_logo).decode())
+except Exception:
+    pass
 
 # Languages offered in the Settings dropdown (code -> human label).
 LANG_OPTIONS = [          # roughly by global usage; the on-bar strip pages 10 at a time
@@ -125,7 +134,15 @@ class Workers:
                                     self.ui_q.put(("peer", (msg.get("text", ""),
                                                             bool(msg.get("final")))))
 
-                        await asyncio.gather(sender(), receiver())
+                        async def closer():       # close the ws on stop so receiver's
+                            while not stop_event.is_set():   # `async for` unblocks promptly
+                                await asyncio.sleep(0.1)
+                            try:
+                                await ws.close()
+                            except Exception:
+                                pass
+
+                        await asyncio.gather(sender(), receiver(), closer())
                 except Exception:
                     if stop_event.is_set():
                         break
@@ -187,7 +204,24 @@ def _label_payload(cfg):
             "target_code": cfg["target"], "room": cfg["room"]}
 
 
+def _set_app_name(name="LiveTranslateBar"):
+    """Best-effort: show `name` instead of 'Python' in the macOS menu bar.
+    (Full rename + Dock icon needs a packaged .app — see README.)"""
+    try:
+        import sys
+        if sys.platform != "darwin":
+            return
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = name
+    except Exception:
+        pass
+
+
 def run_app(cfg, slot=0, skip_wizard=False):
+    _set_app_name("LiveTranslateBar")
     ui_q: queue.Queue = queue.Queue()
     out_q: queue.Queue = queue.Queue()
     pause_event = threading.Event()
@@ -230,18 +264,26 @@ def run_app(cfg, slot=0, skip_wizard=False):
             ready_event.set()
 
         def toggle_pause(self):
-            if pause_event.is_set():
-                pause_event.clear()
-                return False
-            pause_event.set()
-            return True
+            # Pause = fully close the provider session -> guaranteed €0 while paused
+            # (resume reconnects in ~1-2s). Returns True when paused.
+            if workers.running:
+                workers.stop()
+                state["peers"] = 0
+                ui_q.put(("conn", None))     # mark link dropped so resume re-pushes "linked"
+                return True
+            workers.start(cfg, cfg["room"])
+            return False
 
-        def minimize(self):           # power tile -> shrink to the corner pill (engine keeps running)
+        def minimize(self):           # power tile -> corner pill + stop the session (no cost while hidden)
             layout_mini()
+            workers.stop()
+            state["peers"] = 0
+            ui_q.put(("conn", None))         # mark link dropped so restore re-pushes "linked"
             return True
 
-        def restore(self):            # pill ⤢ -> back to the full bar
+        def restore(self):            # pill ⤢ -> full bar + resume the session
             layout_bar()
+            workers.start(cfg, cfg["room"])
             return True
 
         def quit(self):
@@ -305,6 +347,11 @@ def run_app(cfg, slot=0, skip_wizard=False):
             url = ("https://platform.openai.com/api-keys" if engine == "openai"
                    else "https://aistudio.google.com/apikey")
             webbrowser.open(url)
+            return True
+
+        def open_site(self):
+            import webbrowser
+            webbrowser.open("https://livetranslatebar.com")
             return True
 
         def set_target(self, code):

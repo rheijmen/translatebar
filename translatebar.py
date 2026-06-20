@@ -487,8 +487,11 @@ class OpenAIRealtimeWorker:
                 async with websockets.connect(
                         url, additional_headers={"Authorization": f"Bearer {key}"},
                         max_size=None) as ws:
+                    # No input transcription: it spins up a 2nd model (whisper) that
+                    # bills the FULL audio duration again -> doubles the cost. The
+                    # source-text check stays free on Gemini (same session); on OpenAI
+                    # we skip it to keep cost single-metered.
                     await ws.send(json.dumps({"type": "session.update", "session": {"audio": {
-                        "input": {"transcription": {"model": "gpt-4o-mini-transcribe"}},
                         "output": {"language": _oai_lang(self.d.target_language_code)}}}}))
                     self.emit("status", self.d.key, None, "● live", False)
                     backoff = 1.0

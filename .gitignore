@@ -5,3 +5,7 @@ __pycache__/
 *.log
 config.json
 live-vertaalde-meetings-china-playbook.md
+build/
+dist/
+*.spec
+.DS_Store

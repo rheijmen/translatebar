@@ -12,7 +12,7 @@
     cursor:default;}
   .bar{position:absolute;inset:6px;display:flex;
     background:rgba(13,17,23,.94);border:1px solid rgba(255,255,255,.07);
-    border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);overflow:hidden;}
+    border-radius:0;box-shadow:0 12px 40px rgba(0,0,0,.5);overflow:hidden;}
 
   /* left: captions */
   .captions{flex:1;min-width:0;display:flex;flex-direction:column;
@@ -35,7 +35,7 @@
     border:1px solid rgba(255,255,255,.06);display:grid;place-items:center;
     overflow:visible;cursor:pointer;transition:background .15s;}
   .tile.indicator{cursor:default;}
-  .tile::before{content:"";position:absolute;inset:-4px;border-radius:2px;
+  .tile::before{content:"";position:absolute;inset:-4px;border-radius:0;
     background:radial-gradient(closest-side,var(--c,transparent),transparent 70%);
     filter:blur(7px);opacity:0;transition:opacity .25s;pointer-events:none;}
   .tile.on::before{opacity:.55;}
@@ -65,10 +65,10 @@
   .langstrip{position:absolute;left:14px;right:168px;bottom:10px;z-index:8;
     display:none;gap:6px;align-items:center;flex-wrap:nowrap;overflow:hidden;
     background:rgba(13,17,23,.97);border:1px solid rgba(255,255,255,.10);
-    border-radius:8px;padding:6px 8px;box-shadow:0 8px 28px rgba(0,0,0,.5);}
+    border-radius:0;padding:6px 8px;box-shadow:0 8px 28px rgba(0,0,0,.5);}
   .langstrip.show{display:flex;}
   .lang-chip{font-size:13px;color:#c9d1d9;background:#161b22;white-space:nowrap;
-    border:1px solid rgba(255,255,255,.10);border-radius:6px;padding:5px 10px;cursor:pointer;}
+    border:1px solid rgba(255,255,255,.10);border-radius:0;padding:5px 10px;cursor:pointer;}
   .lang-chip:hover{background:#1b222c;}
   .lang-chip.cur{border-color:var(--green);color:#7ee787;}
   .lang-next{margin-left:auto;cursor:pointer;color:#8b949e;padding:4px 8px;
@@ -76,26 +76,34 @@
   .lang-next:hover{color:#e6edf3;}
 
   /* minimized pill (bottom-right corner) — engine keeps running */
-  #mini{display:none;position:fixed;right:10px;bottom:10px;
-    flex-direction:column;align-items:stretch;gap:5px;
-    background:rgba(13,17,23,.97);border:1px solid rgba(255,255,255,.12);
-    border-radius:10px;padding:7px 9px;box-shadow:0 10px 30px rgba(0,0,0,.55);}
+  #mini{display:none;position:fixed;inset:0;box-sizing:border-box;
+    flex-direction:column;justify-content:center;gap:6px;
+    background:#0d1117;border:1px solid rgba(255,255,255,.14);padding:8px 10px;}
   body.mini .bar{display:none;}
   body.mini #mini{display:flex;}
   #mini .status{text-align:center;}
   .mini-btns{display:flex;gap:6px;}
-  .mini-b{flex:1;display:grid;place-items:center;height:30px;border-radius:6px;
+  .mini-b{flex:1;display:grid;place-items:center;height:30px;border-radius:0;
     background:#161b22;border:1px solid rgba(255,255,255,.10);color:#c9d1d9;
     cursor:pointer;font-size:15px;line-height:1;}
   .mini-b:hover{background:#1b222c;color:#e6edf3;}
   .mini-x:hover{background:#3a1417;border-color:var(--red);color:#ff7b72;}
 
   /* settings panel — fills the window once it grows to card size */
-  .settings{position:fixed;inset:0;background:rgba(13,17,23,.985);z-index:20;
-    display:none;flex-direction:column;padding:15px 18px 13px;border-radius:10px;}
+  .settings{position:fixed;inset:0;background:#0d1117;z-index:20;
+    display:none;flex-direction:column;padding:15px 18px 13px;border-radius:0;}
   .settings.show{display:flex;}
   .s-head{display:flex;justify-content:space-between;align-items:center;
     font-size:15px;font-weight:700;color:#e6edf3;margin-bottom:4px;}
+  .s-title{display:flex;align-items:center;gap:10px;}
+  .brand{height:26px;width:auto;display:block;}
+  .wordmark{font-family:ui-monospace,Menlo,monospace;font-size:14px;font-weight:700;
+    letter-spacing:1px;color:#e6edf3;}
+  .credit{margin-top:11px;padding-top:9px;border-top:1px solid rgba(255,255,255,.08);
+    font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.6px;
+    color:#6e7681;text-align:center;text-transform:uppercase;}
+  .credit .site{color:var(--blue);cursor:pointer;text-transform:none;}
+  .credit .site:hover{text-decoration:underline;}
   .s-close{cursor:pointer;color:#8b949e;font-size:15px;padding:2px 6px;}
   .s-close:hover{color:#e6edf3;}
   .s-hint{font-size:12px;color:var(--amber);margin-bottom:6px;display:none;}
@@ -103,13 +111,13 @@
   .s-row{display:flex;flex-direction:column;gap:3px;}
   .s-row label{font-size:11px;color:#8b949e;font-weight:600;letter-spacing:.2px;}
   .s-row input,.s-row select{background:#0d1117;border:1px solid rgba(255,255,255,.12);
-    border-radius:6px;color:#e6edf3;font-size:13px;padding:7px 9px;outline:none;font-family:inherit;}
+    border-radius:0;color:#e6edf3;font-size:13px;padding:7px 9px;outline:none;font-family:inherit;}
   .s-row input:focus,.s-row select:focus{border-color:var(--blue);}
   .s-link{font-size:11px;color:var(--blue);cursor:pointer;margin-top:-3px;align-self:flex-start;}
   .s-link:hover{text-decoration:underline;}
   .s-err{font-size:12px;color:var(--red);min-height:15px;padding-top:4px;}
   .s-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:6px;}
-  .s-btn{font-family:inherit;font-size:13px;font-weight:600;border-radius:6px;padding:7px 16px;
+  .s-btn{font-family:inherit;font-size:13px;font-weight:600;border-radius:0;padding:7px 16px;
     cursor:pointer;border:1px solid rgba(255,255,255,.14);background:#161b22;color:#c9d1d9;}
   .s-btn:hover{background:#1b222c;}
   .s-save{background:var(--green);border-color:var(--green);color:#06210d;}
@@ -123,10 +131,10 @@
   .wz-share{font-size:12px;color:#8b949e;margin:10px 0 6px;}
   .wz-copyrow{display:flex;gap:6px;align-items:stretch;}
   .wz-copyrow input{flex:1;min-width:0;background:#0d1117;border:1px solid rgba(255,255,255,.12);
-    border-radius:6px;color:#7ee787;font-size:12px;padding:7px 9px;outline:none;font-family:inherit;
+    border-radius:0;color:#7ee787;font-size:12px;padding:7px 9px;outline:none;font-family:inherit;
     text-overflow:ellipsis;}
   .wz-copyrow .s-btn{white-space:nowrap;}
-  .s-row textarea{background:#0d1117;border:1px solid rgba(255,255,255,.12);border-radius:6px;
+  .s-row textarea{background:#0d1117;border:1px solid rgba(255,255,255,.12);border-radius:0;
     color:#7ee787;font-size:12px;padding:7px 9px;outline:none;font-family:inherit;resize:none;}
   .s-row textarea:focus{border-color:var(--blue);}
   .wz-note{font-size:11px;color:#6e7681;margin:6px 0 11px;line-height:1.5;}
@@ -167,7 +175,7 @@
   </div>
 
   <div class="settings" id="settingsPanel">
-    <div class="s-head"><span>Settings</span><span class="s-close" onclick="closeSettings()">✕</span></div>
+    <div class="s-head"><span class="s-title"><img class="brand" src="__LOGO__" alt=""><span class="wordmark">LiveTranslateBar</span></span><span class="s-close" onclick="closeSettings()">✕</span></div>
     <div class="s-hint" id="sHint">Welcome — fill these in to start translating.</div>
     <div class="s-body">
       <div class="s-row"><label>Your name</label><input id="fName" type="text"></div>
@@ -187,15 +195,17 @@
       <span class="s-btn" onclick="closeSettings()">Cancel</span>
       <span class="s-btn s-save" onclick="saveSettings()">Save</span>
     </div>
+    <div class="credit"><span class="site" onclick="openSite()">livetranslatebar.com</span> · © Rik Heijmen</div>
   </div>
 
   <div class="settings" id="wizard">
-    <div class="s-head"><span id="wzTitle">Welcome</span><span class="s-close" onclick="closeWizard()">✕</span></div>
+    <div class="s-head"><span class="s-title"><img class="brand" src="__LOGO__" alt=""><span id="wzTitle">Welcome</span></span><span class="s-close" onclick="closeWizard()">✕</span></div>
     <div class="s-body">
       <div class="wz-step" id="wzKey">
         <div class="wz-intro">TranslateBar shows live translated subtitles next to your video call. Each side translates its own microphone with Google Gemini — paste your key once.</div>
         <div class="s-row"><label>Gemini API key</label><input id="wzKeyInput" type="password" autocomplete="off" placeholder="paste your key"></div>
         <span class="s-link" onclick="keyHelp()">How do I get a key? ↗</span>
+        <div class="wz-note">💡 Tip: set a monthly spending limit on your key in your provider's billing settings — then a forgotten session can never surprise you.</div>
       </div>
       <div class="wz-step" id="wzConnect">
         <div class="wz-intro">Are you starting this meeting, or joining one the other side started?</div>
@@ -230,20 +240,28 @@
   <script>
     const PLAY = '<polygon points="6,4 20,12 6,20" fill="#e6edf3" stroke="none"/>';
     const PAUSE = '<rect x="6" y="5" width="4" height="14" fill="#e6edf3" stroke="none"/><rect x="14" y="5" width="4" height="14" fill="#e6edf3" stroke="none"/>';
-    let live = true, linked = false, closeArmed = false, closeTimer = null;
+    let live = true, linked = false, closeArmed = false, closeTimer = null, pausedReason = "";
 
     function renderStatus(){
       if (closeArmed) return;
-      const pC = live ? 'var(--green)' : 'var(--amber)';
-      const lC = linked ? 'var(--green)' : 'var(--neutral)';
-      const glyph = `<span class="lk ${linked ? 'linked' : 'pairing'}"><svg viewBox="0 0 24 24">`
-        + `<path d="M9 15l6-6"/><path d="M11 7l1-1a4 4 0 0 1 6 6l-1 1"/>`
-        + `<path d="M13 17l-1 1a4 4 0 0 1-6-6l1-1"/></svg></span>`;
-      const html = `<span style="color:${pC}">${live ? 'live' : 'paused'}</span>` + glyph +
-        `<span style="color:${lC}">${linked ? 'linked' : 'pairing…'}</span>`;
+      let html;
+      if (!live){                            // paused = session closed -> no cost
+        html = `<span style="color:var(--amber)">paused${pausedReason ? ' · ' + pausedReason : ''}</span>`;
+      } else {
+        const lC = linked ? 'var(--green)' : 'var(--neutral)';
+        const glyph = `<span class="lk ${linked ? 'linked' : 'pairing'}"><svg viewBox="0 0 24 24">`
+          + `<path d="M9 15l6-6"/><path d="M11 7l1-1a4 4 0 0 1 6 6l-1 1"/>`
+          + `<path d="M13 17l-1 1a4 4 0 0 1-6-6l1-1"/></svg></span>`;
+        html = `<span style="color:var(--green)">live</span>` + glyph +
+          `<span style="color:${lC}">${linked ? 'linked' : 'pairing…'}</span>`;
+      }
       document.getElementById('status').innerHTML = html;
       const ms = document.getElementById('miniStatus');
       if (ms) ms.innerHTML = html;          // keep the minimized pill's status in sync
+    }
+    function setPaused(reason){             // called from Python on idle / 2h auto-pause
+      live = false; linked = false; pausedReason = reason || '';
+      renderPause();
     }
     // --- pushed from Python ---
     let curRouting = {name:"You", peer:"Team", targetLabel:"", room:""};
@@ -324,10 +342,14 @@
     // --- minimize / restore / quit (power tile = minimize; quit lives in the pill) ---
     function minimize(){
       document.body.classList.add('mini');
+      live = false; linked = false; pausedReason = '';   // stop session -> €0 while hidden
+      renderStatus();
       if (window.pywebview) window.pywebview.api.minimize();
     }
     function restoreBar(){
       document.body.classList.remove('mini');
+      live = true; pausedReason = '';
+      renderPause();
       if (window.pywebview) window.pywebview.api.restore();
     }
     function quitApp(){ if (window.pywebview) window.pywebview.api.quit(); }
@@ -545,6 +567,7 @@
       else { err.textContent = (res && res.error) || 'Something went wrong.'; }
     }
     function keyHelp(){ if (window.pywebview) window.pywebview.api.open_key_help(document.getElementById('fEngine').value); }
+    function openSite(){ if (window.pywebview) window.pywebview.api.open_site(); }
     // --- user actions ---
     function renderPause(){
       document.getElementById('pp').className = 'tile on ' + (live ? 'green' : 'amber');
@@ -555,7 +578,7 @@
       live = !live;                 // optimistic: flip + render instantly (one click)
       renderPause();
       if (window.pywebview)
-        window.pywebview.api.toggle_pause().then(p => { live = !p; renderPause(); });
+        window.pywebview.api.toggle_pause().then(p => { live = !p; if (p) linked = false; pausedReason = ''; renderPause(); });
     }
     function requestClose(){
       if (closeArmed){ if (window.pywebview) window.pywebview.api.quit(); return; }

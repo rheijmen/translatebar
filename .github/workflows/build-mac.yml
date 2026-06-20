@@ -1,0 +1,55 @@
+name: build-mac
+
+# Builds LiveTranslateBar.app on a macOS runner and uploads it as a downloadable
+# artifact. Run it from the Actions tab ("Run workflow") or on push to main.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "duo_web.py"
+      - "translatebar.py"
+      - "appconfig.py"
+      - "bar.html"
+      - "hosting.py"
+      - "relay.py"
+      - "assets/**"
+      - "requirements.txt"
+      - ".github/workflows/build-mac.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest        # Apple Silicon (arm64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # audioop is stdlib through 3.12
+
+      - name: Install PortAudio (for PyAudio)
+        run: brew install portaudio
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build LiveTranslateBar.app
+        run: |
+          pyinstaller --windowed --name LiveTranslateBar \
+            --icon assets/LiveTranslateBar.icns \
+            --add-data "bar.html:." \
+            --add-data "assets:assets" \
+            --collect-all webview \
+            --collect-all google.genai \
+            --noconfirm duo_web.py
+
+      - name: Zip the app
+        run: ditto -c -k --keepParent "dist/LiveTranslateBar.app" "LiveTranslateBar-mac.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiveTranslateBar-mac
+          path: LiveTranslateBar-mac.zip
