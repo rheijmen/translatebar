@@ -18,7 +18,7 @@ import translatebar as tb
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", default="nl")
-    ap.add_argument("--engine", default="chunked", help="chunked | live")
+    ap.add_argument("--engine", default="chunked", help="chunked | live | transcribe")
     ap.add_argument("--model", default=None, help="model for the active engine")
     ap.add_argument("--seconds", type=int, default=14)
     a = ap.parse_args()

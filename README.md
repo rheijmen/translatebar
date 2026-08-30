@@ -75,6 +75,19 @@ button on the bar.
 
 ---
 
+## Engines
+
+Pick the translation engine under ⚙ **Settings → Engine**:
+
+- **Gemini Transcribe → translate** — `gemini-3.5-transcribe-live` turns your
+  speech into clean text (fillers removed, 85+ languages auto-detected), then a
+  fast text model translates it. Sharpest captions; uses your Gemini key.
+- **Gemini — streaming** — the speech-to-speech translate model; the bar shows
+  its transcripts. The original engine.
+- **OpenAI — streaming** — `gpt-realtime-translate`; needs an OpenAI API key.
+
+---
+
 ## How a meeting connects
 
 ```
