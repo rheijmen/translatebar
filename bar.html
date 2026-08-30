@@ -482,10 +482,14 @@
       } else { msg.textContent=(res&&res.error)||'Could not start hosting.'; }
     }
     function inviteText(){
+      const l = document.getElementById('wzLink').value;
+      // same tunnel, opened as a web page: the relay serves guest.html on https
+      const guest = l.replace(/^wss:\/\//i, 'https://').replace('#', '/#');
       return 'Join my live-translated meeting in TranslateBar:\n' +
-             '1. Get the app (one-time setup): https://github.com/rheijmen/translatebar\n' +
-             '2. Open it, click "I\'m joining", and paste this:\n' +
-             document.getElementById('wzLink').value;
+             '• Read along in your browser (no install): ' + guest + '\n' +
+             '• Or talk back too, with the app: https://github.com/rheijmen/translatebar\n' +
+             '  Open it, click "I\'m joining", and paste this:\n' +
+             l;
     }
     function copyInvite(){
       if (window.pywebview) window.pywebview.api.copy(inviteText());

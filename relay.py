@@ -5,16 +5,44 @@ Each peer sends {"type":"join","room":"<key>"} once, then small JSON caption
 messages. The relay forwards every message to the *other* members of the same
 room. It never sees audio — only tiny text payloads — so bandwidth is trivial.
 
+A plain browser GET on the same port gets guest.html — the zero-install guest
+view: the host's invitation link opened as https:// instead of wss:// shows the
+live captions in any browser, no app needed.
+
 Run locally:   .venv/bin/python relay.py        # ws://0.0.0.0:8765
 Env overrides: RELAY_HOST, RELAY_PORT
 """
 import asyncio
 import json
 import os
+import pathlib
+import sys
+from http import HTTPStatus
 
 import websockets
 
 ROOMS: dict[str, set] = {}  # room key -> set of connected sockets
+
+
+def _guest_html() -> str:
+    """guest.html next to this script (or in the frozen app's resource dir)."""
+    base = pathlib.Path(getattr(sys, "_MEIPASS",
+                                pathlib.Path(__file__).resolve().parent))
+    try:
+        return (base / "guest.html").read_text(encoding="utf-8")
+    except OSError:
+        return "<h1>TranslateBar relay</h1><p>guest.html missing from this build.</p>"
+
+
+def _serve_guest(connection, request):
+    """Serve the guest page to plain HTTP GETs; WebSocket upgrades pass through
+    (return None -> the handshake continues into handler)."""
+    if (request.headers.get("Upgrade") or "").lower() == "websocket":
+        return None
+    resp = connection.respond(HTTPStatus.OK, _guest_html())
+    del resp.headers["Content-Type"]
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
 
 
 def _broadcast_count(room: str) -> int:
@@ -77,7 +105,7 @@ async def main():
     host = os.environ.get("RELAY_HOST", "0.0.0.0")
     port = int(os.environ.get("RELAY_PORT", "8765"))
     print(f"relay listening on ws://{host}:{port}")
-    async with websockets.serve(handler, host, port):
+    async with websockets.serve(handler, host, port, process_request=_serve_guest):
         await asyncio.Future()  # run forever
 
 

@@ -106,7 +106,13 @@ Pick the translation engine under ⚙ **Settings → Engine**:
 The host runs the relay (via **Start hosting**) and shares one link; that link
 already contains the room, so the other side just pastes it. The link is a
 `wss://…trycloudflare.com#room` address — it's a **connection link you paste
-into the app**, not a website.
+into the app**.
+
+**Zero-install guests:** the same link opened as
+`https://…trycloudflare.com/#room` is a web page — the relay serves a guest
+view that shows the host's translated captions live in any browser, no app
+needed. The invitation includes this browser link automatically. Guest view is
+read-only; talking back with translation still needs the app.
 
 ---
 

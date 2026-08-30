@@ -1,0 +1,46 @@
+# Fast checks on every PR and push to main. No audio/GUI here — pyaudio,
+# tkinter and pywebview are exercised by the macOS build workflow instead.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal dependencies
+        run: pip install google-genai websockets
+
+      - name: Compile all modules
+        run: python -m py_compile *.py
+
+      - name: Engine config builds (Live + transcribe)
+        run: |
+          python -c "
+          import translatebar as tb
+          cfg = tb.build_config('zh-Hans')
+          assert cfg.translation_config.target_language_code == 'zh-Hans'
+          tcfg = tb.build_transcribe_config()
+          assert list(tcfg.response_modalities) == ['TEXT']
+          print('config builds OK')
+          "
+
+      - name: Offline transcribe-engine test
+        run: python test_transcribe.py
+
+      - name: Relay forward + guest page test
+        run: |
+          python relay.py &
+          sleep 2
+          python test_relay.py | tee relay_out.txt
+          grep -q "RELAY OK" relay_out.txt
+          curl -sf http://localhost:8765/ | grep -qi "TranslateBar"
