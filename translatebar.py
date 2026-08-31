@@ -71,6 +71,8 @@ CHUNK = 1024
 AUDIO_MIME = f"audio/pcm;rate={SEND_SAMPLE_RATE}"
 MODEL = "gemini-3.5-live-translate-preview"   # "live" engine: speech -> speech
 DEFAULT_CHUNK_MODEL = "gemini-3.1-flash-lite"  # "chunked" engine: audio -> text (cheap)
+TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"   # "transcribe" engine: speech -> text
+TRANSCRIBE_TEXT_MODEL = "gemini-3.1-flash-lite"   # "transcribe" engine: text -> translation
 OPENAI_TRANSLATE_MODEL = "gpt-realtime-translate"  # "openai" engine: streaming translate
 OPENAI_SR = 24000                              # OpenAI realtime wants 24 kHz PCM16
 
@@ -109,6 +111,18 @@ def build_config(target_language_code: str, model: str = MODEL):
             f"into {target_language_code} and speak ONLY the translation — no "
             f"greetings, answers, or commentary. If the speech is already in "
             f"{target_language_code}, repeat it as-is."),
+    )
+
+
+def build_transcribe_config():
+    """Live-connect config for the transcribe engine (gemini-3.5-transcribe-live).
+    The model transcribes the input stream — no translation config here; the
+    transcript surfaces either as input_transcription events or as plain model
+    text, and TranscribeWorker._receive reads both."""
+    from google.genai import types
+    return types.LiveConnectConfig(
+        response_modalities=["TEXT"],
+        input_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
 
@@ -445,6 +459,175 @@ class ChunkedWorker:
             self.emit("error", self.d.key, None, f"translate failed ({e!r})", False)
 
 
+class TranscribeWorker:
+    """Two-stage engine: gemini-3.5-transcribe-live turns the mic into polished
+    source text (fillers removed, self-corrections resolved, 85+ languages
+    auto-detected) and a fast text model translates each finalized segment into
+    the target language. Splitting speech->text from text->translation keeps the
+    caption path on the most accurate STT available and avoids the speech->speech
+    round trip entirely. Same emit/stop/pause/teardown contract as the other
+    engines (TaskGroup + _stopper releases the mic on stop):
+      orig  = the transcript (your own-words check line)
+      trans = the translation (what the peer reads)
+    A segment finalizes on the model's `finished` flag, with a quiet-gap
+    fallback (FINALIZE_S of no new transcript) so a segment that never gets the
+    flag still flushes.
+    """
+    FINALIZE_S = 1.0
+
+    def __init__(self, client, direction: Direction, emit, stop_event: threading.Event,
+                 pause_event: threading.Event | None = None,
+                 model: str = TRANSCRIBE_MODEL, text_model: str = TRANSCRIBE_TEXT_MODEL):
+        self.client = client
+        self.d = direction
+        self.emit = emit
+        self.stop_event = stop_event
+        self.pause_event = pause_event
+        self.model = model
+        self.text_model = text_model
+        self._audio_q: asyncio.Queue | None = None
+        self._text_q: asyncio.Queue | None = None
+        self._seg = ""              # source transcript, current segment
+        self._last_delta = 0.0
+
+    async def run(self):
+        self._audio_q = asyncio.Queue(maxsize=50)
+        self._text_q = asyncio.Queue(maxsize=20)
+        backoff = 1.0
+        while not self.stop_event.is_set():
+            try:
+                self.emit("status", self.d.key, None, "connecting…", False)
+                cfg = build_transcribe_config()
+                async with self.client.aio.live.connect(model=self.model, config=cfg) as session:
+                    self.emit("status", self.d.key, None, "● live", False)
+                    backoff = 1.0
+                    self._seg = ""
+                    async with asyncio.TaskGroup() as tg:
+                        tg.create_task(self._produce_audio())
+                        tg.create_task(self._send_audio(session))
+                        tg.create_task(self._receive(session))
+                        tg.create_task(self._translate_loop())
+                        tg.create_task(self._finalizer())
+                        tg.create_task(self._stopper())
+            except Exception as eg:
+                if self.stop_event.is_set():
+                    break
+                excs = eg.exceptions if isinstance(eg, BaseExceptionGroup) else (eg,)
+                msg = "; ".join(sorted({repr(e) for e in excs}))
+                self.emit("error", self.d.key, None, f"reconnecting ({msg})", False)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 15.0)
+        self.emit("status", self.d.key, None, "stopped", False)
+
+    async def _stopper(self):
+        while not self.stop_event.is_set():
+            await asyncio.sleep(0.1)
+        raise _StopWorker
+
+    # -- audio in --------------------------------------------------------------
+    async def _produce_audio(self):
+        if self.d.source == "wav":
+            wf = wave.open(self.d.wav_path, "rb")
+            assert wf.getframerate() == SEND_SAMPLE_RATE and wf.getnchannels() == CHANNELS
+            while not self.stop_event.is_set():
+                data = wf.readframes(CHUNK)
+                if not data:
+                    break
+                await self._audio_q.put(data)
+                await asyncio.sleep(CHUNK / SEND_SAMPLE_RATE)
+            await self._audio_q.put(None)
+        else:
+            async for frame in _mic_frames(self.stop_event, self.pause_event,
+                                           self.d.device_index):
+                await self._audio_q.put(frame)
+
+    async def _send_audio(self, session):
+        from google.genai import types
+        while not self.stop_event.is_set():
+            data = await self._audio_q.get()
+            if data is None:                       # wav finished
+                await session.send_realtime_input(audio_stream_end=True)
+                continue
+            await session.send_realtime_input(
+                audio=types.Blob(data=data, mime_type=AUDIO_MIME)
+            )
+
+    # -- transcript in -> segments out -----------------------------------------
+    async def _receive(self, session):
+        loop = asyncio.get_running_loop()
+        async for msg in session.receive():
+            sc = getattr(msg, "server_content", None)
+            if not sc:
+                continue
+            it = getattr(sc, "input_transcription", None)
+            if it and it.text:
+                self._on_transcript(it.text, bool(getattr(it, "finished", False)),
+                                    loop.time())
+                continue
+            t = getattr(msg, "text", None)         # transcript as plain model text
+            if t:
+                self._on_transcript(t, bool(getattr(sc, "turn_complete", False)),
+                                    loop.time())
+
+    def _on_transcript(self, text: str, finished: bool, now: float):
+        self._seg += text
+        self._last_delta = now
+        self.emit("update", self.d.key, "orig", self._seg.strip(), bool(finished))
+        if finished:
+            self._flush_segment()
+
+    def _flush_segment(self):
+        seg = self._seg.strip()
+        self._seg = ""
+        if not seg:
+            return
+        try:
+            self._text_q.put_nowait(seg)
+        except asyncio.QueueFull:
+            pass   # translator behind: skip to stay live
+
+    def _maybe_finalize(self, now: float) -> bool:
+        """Quiet-gap fallback: flush a segment the model never marked finished."""
+        if self._seg.strip() and (now - self._last_delta) >= self.FINALIZE_S:
+            self.emit("update", self.d.key, "orig", self._seg.strip(), True)
+            self._flush_segment()
+            return True
+        return False
+
+    async def _finalizer(self):
+        loop = asyncio.get_running_loop()
+        while not self.stop_event.is_set():
+            await asyncio.sleep(0.25)
+            self._maybe_finalize(loop.time())
+
+    # -- segments -> translation ------------------------------------------------
+    async def _translate_loop(self):
+        from google.genai import types
+        tgt = self.d.target_language_code
+        instr = (
+            f"You are a real-time interpreter. Translate the text you receive "
+            f"into {tgt}. Output ONLY the translation — no quotes, labels, or "
+            f"notes. If the text is already in {tgt}, return it verbatim.")
+        cfg = types.GenerateContentConfig(
+            system_instruction=instr, temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0))
+        while not self.stop_event.is_set():
+            seg = await self._text_q.get()
+            out = ""
+            try:
+                stream = await self.client.aio.models.generate_content_stream(
+                    model=self.text_model, contents=[seg], config=cfg)
+                async for ch in stream:
+                    t = getattr(ch, "text", None)
+                    if t:
+                        out += t
+                        self.emit("update", self.d.key, "trans", out, False)
+                if out.strip():
+                    self.emit("update", self.d.key, "trans", out.strip(), True)
+            except Exception as e:
+                self.emit("error", self.d.key, None, f"translate failed ({e!r})", False)
+
+
 def _oai_lang(code: str) -> str:
     """OpenAI realtime-translate output language code (zh, en, nl, …)."""
     return (code or "en").split("-")[0].lower()
@@ -564,14 +747,24 @@ def make_client():
 
 def run_engine(directions: list[Direction], emit, stop_event: threading.Event,
                pause_event: threading.Event | None = None,
-               engine: str = "chunked", model: str | None = None):
+               engine: str = "chunked", model: str | None = None,
+               text_model: str | None = None):
     """Run all directions concurrently in one asyncio loop (own thread).
     engine="chunked" = cheap audio->text (generate_content); "live" = streaming
-    Live API. `model` is the model for the ACTIVE engine (defaults per engine)."""
+    Live API; "transcribe" = streaming speech->text + a text translate step
+    (`text_model`, default TRANSCRIBE_TEXT_MODEL). `model` is the model for the
+    ACTIVE engine (defaults per engine)."""
     async def _main():
         if engine == "openai":
             om = model or OPENAI_TRANSLATE_MODEL
             workers = [OpenAIRealtimeWorker(d, emit, stop_event, pause_event, om)
+                       for d in directions]
+        elif engine == "transcribe":
+            client = make_client()
+            tm = model or TRANSCRIBE_MODEL
+            xm = text_model or TRANSCRIBE_TEXT_MODEL
+            workers = [TranscribeWorker(client, d, emit, stop_event, pause_event,
+                                        model=tm, text_model=xm)
                        for d in directions]
         elif engine == "live":
             client = make_client()
@@ -870,6 +1063,8 @@ def check():
         for code in (DEFAULT_TARGET_THEM, DEFAULT_TARGET_YOU):
             cfg = build_config(code)
             assert cfg.translation_config.target_language_code == code
+        tcfg = build_transcribe_config()
+        assert list(tcfg.response_modalities) == ["TEXT"]
         print("✓ google-genai import + LiveConnectConfig build OK")
     except Exception as e:
         ok = False

@@ -174,6 +174,7 @@ class Workers:
         engine = cfg.get("engine", "live")
         model = (cfg.get("openai_model") if engine == "openai"
                  else cfg.get("live_model") if engine == "live"
+                 else cfg.get("transcribe_model") if engine == "transcribe"
                  else tb.DEFAULT_CHUNK_MODEL)
         self.engine_t = threading.Thread(
             target=tb.run_engine,
@@ -500,8 +501,9 @@ def main():
     ap.add_argument("--name", default=None)
     ap.add_argument("--peer-name", default=None)
     ap.add_argument("--slot", type=int, default=0, help="stack position for local testing")
-    ap.add_argument("--engine", default=None, help="chunked | live (overrides config)")
-    ap.add_argument("--model", default=None, help="chunked-engine model (overrides config)")
+    ap.add_argument("--engine", default=None,
+                    help="chunked | live | transcribe | openai (overrides config)")
+    ap.add_argument("--model", default=None, help="active-engine model (overrides config)")
     args = ap.parse_args()
 
     # single-instance guard: bind a loopback port (per --slot, so the local 2-bar
@@ -518,7 +520,9 @@ def main():
     if args.engine:
         cfg["engine"] = args.engine
     if args.model:
-        cfg["openai_model" if cfg["engine"] == "openai" else "live_model"] = args.model
+        cfg["openai_model" if cfg["engine"] == "openai"
+            else "transcribe_model" if cfg["engine"] == "transcribe"
+            else "live_model"] = args.model
     if args.name:
         cfg["name"] = args.name
     if args.peer_name:

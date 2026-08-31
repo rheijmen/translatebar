@@ -12,6 +12,7 @@ on:
       - "translatebar.py"
       - "appconfig.py"
       - "bar.html"
+      - "guest.html"
       - "hosting.py"
       - "relay.py"
       - "assets/**"
@@ -48,6 +49,7 @@ jobs:
           pyinstaller --windowed --name LiveTranslateBar \
             --icon assets/LiveTranslateBar.icns \
             --add-data "bar.html:." \
+            --add-data "guest.html:." \
             --add-data "assets:assets" \
             --add-binary "vendor/cloudflared:." \
             --collect-all webview \

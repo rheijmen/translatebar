@@ -57,8 +57,9 @@ DEFAULTS = {
     "mic_index": None,            # None = system default input device
     "relay": "ws://localhost:8765",
     "room": "",                   # "" => auto-detect the open Meet tab at launch
-    "engine": "live",             # "live" = Gemini translate (streaming) | "openai"
+    "engine": "live",             # "live" = Gemini translate (streaming) | "transcribe" | "openai"
     "live_model": "gemini-3.5-live-translate-preview",  # Gemini engine model
+    "transcribe_model": "gemini-3.5-transcribe-live",   # transcribe engine STT model
     "openai_model": "gpt-realtime-translate",           # OpenAI engine model
 }
 
